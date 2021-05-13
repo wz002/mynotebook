@@ -1,0 +1,12 @@
+1、进入/usr/src/kernels/下看有没有相应的内核开发包，没有，就安装，若有跳过第一步
+
+UNAME=$(uname -r)
+yum -y install gcc kernel-devel-${UNAME%.*}
+
+2、进入/lib/modules/3.10.0-693.el7.x86_64，创建软连接
+
+ln -s /usr/src/kernels/3.10.0-693.el7.x86_64/ /lib/modules/3.10.0-693.el7.x86_64/build
+
+我创建的时候，创建失败，提示 ：“ln: 创建符号链接 “build”: 文件已存在”
+
+ls -l /lib/modules/3.10.0-693.el7.x86_64
