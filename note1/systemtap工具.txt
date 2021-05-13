@@ -1,0 +1,721 @@
+stap --all-modules get_kernel.stp
+不然可能只能打印其中一个模块的栈
+打开内核的调试
+cat /sys/kernel/iraid/trace_level
+echo add bio >  /sys/kernel/iraid/trace_level
+
+system 官网上的例子：
+https://sourceware.org/systemtap/examples/keyword-index.html#DISK
+
+注意：安装的模块需要指定的目录下，否则会报错
+
+例如raid456.ko我们安装了以后，需要复制到下面这个目录
+/usr/lib/modules/3.10.0-123.el7.x86_64/kernel/drivers/md/raid456.ko
+下面是我们编写的一个例子：
+
+[root@localhost iraid]# cat test.stp 
+#!/usr/bin/stap
+global counter
+probe begin {  
+        printf("now we will probe linux kernel\n");
+}
+probe module("raid456").function("iraid_ops_run_io") {
+        counter++
+        printf("enter iraid_ops_run_io\n");
+}
+probe end{
+       printf("now we will end probe %d\n",counter);
+}
+
+完事儿以后，可以ctrl+c 打断这次proble。
+
+
+获取内核的变量值：
+
+[root@localhost iraid]# cat get_kernel.stp 
+#!/usr/bin/stap
+probe begin{
+        printf("now about to probe kernel\n");
+}
+probe module("raid456").statement("*@raid5.c:7894") {
+
+        printf("get it \n");
+        printf("%d\n",$conf->max_nr_stripes);
+}
+probe end{
+        printf("end this probe\n");
+}
+
+可以打印更多的值，如下所示：
+
+#!/usr/bin/stap
+#
+probe begin{
+        printf("now about to probe kernel\n");
+}
+probe module("raid456").statement("*@raid5.c:7894") {
+
+        printf("%d\n",$conf->max_nr_stripes);
+        printf("%d\n",$conf->chunk_sectors);
+        printf("%d\n",$conf->max_degraded);
+}
+probe end{
+        printf("end this probe\n");
+}
+
+这里一定要注意两点：
+(1)、模块一定不要写错。探测的函数编译到哪个模块，就写哪个模块？
+(2)、探测的行数一定要对。否则会提示错误，如下：
+[root@localhost iraid]# ./get_kernel.stp 
+semantic error: multiple addresses for /root/12G_R2_DRIVER/driver/raid5.c:7893 [man error::dwarf] (try /root/12G_R2_DRIVER/driver/raid5.c:7892 or /root/12G_R2_DRIVER/driver/raid5.c:7894)
+semantic error: while resolving probe point: identifier 'module' at ./get_kernel.stp:6:7
+        source: probe module("raid456").statement("*@raid5.c:7893") {
+                      ^
+semantic error: no match
+Pass 2: analysis failed.  [man error::pass2]
+
+stap改变内核变量的值：
+
+[root@localhost iraid]# cat get_kernel.stp 
+probe begin{
+        printf("now about to probe kernel\n");
+}
+probe module("raid456").statement("*@raid5.c:7894") {
+
+        printf("%d\n",$conf->max_nr_stripes);
+        $conf->max_nr_stripes = $1
+        printf("%d\n",$conf->max_nr_stripes);
+}
+probe end{
+        printf("end this probe\n");
+}
+执行方式有点小变动：
+ stap -g get_kernel.stp 2048
+需要加 -g 参数。否则会报错：
+write to target variable not permitted; need stap -g: identifie
+
+思考：如果要改变多个值怎么办？
+
+打印结构体：
+[root@localhost iraid]# cat get_kernel.stp 
+#!/usr/bin/stap
+#
+probe begin{
+        printf("now about to probe kernel\n");
+}
+probe module("raid456").statement("*@raid5.c:7894") {
+
+        printf("$conf$: %s\n", $conf$);
+        printf("$conf$$: %s\n", $conf$$);
+
+}
+probe end{
+        printf("end this probe\n");
+}
+
+这里需要注意：$conf$ 和 $conf$$的差异.如下图所示
+
+[root@localhost iraid]# ./get_kernel.stp 
+now about to probe kernel
+$conf$: {.stripe_hashtbl=0xffff880270479000, .mddev=0xffff88047301d000, .chunk_sectors=1024, .level=6, .algorithm=2, .max_degraded=2, .raid_disks=6, .data_disks=0, .max_nr_stripes=2048, .reshape_progress=18446744073709551615, .reshape_safe=0, .previous_raid_disks=6, .prev_chunk_sectors=0, .prev_algo=0, .generation=0, .reshape_checkpoint=0, .min_offset_diff=0, .handle_list={...}, .hold_list={...}, .delayed_list={...}, .bitmap_list={...}, .retry_read_aligned=0x0, .retry_read_aligned_list=0x0, .preread_active_stripes
+
+$conf$$: {.stripe_hashtbl=0xffff880270479000, .mddev=0xffff88047301d000, .chunk_sectors=1024, .level=6, .algorithm=2, .max_degraded=2, .raid_disks=6, .data_disks=0, .max_nr_stripes=2048, .reshape_progress=18446744073709551615, .reshape_safe=0, .previous_raid_disks=6, .prev_chunk_sectors=0, .prev_algo=0, .generation=0, .reshape_checkpoint=0, .min_offset_diff=0, .handle_list={.next=0xffff88043e52ee60, .prev=0xffff88043e52ee60}, .hold_list={.next=0xffff88043e52ee70, .prev=0xffff88043e52ee70}, .delayed_list={.next=0xff
+
+打印函数调用栈
+
+stap --all-modules get_kernel.stp
+不然只能打印其中一个模块的栈
+
+
+systemtap 使用前提。可以用下面的安装命令
+rpm -ivh kernel-debuginfo-common-x86_64-3.10.0-123.el7.x86_64.rpm
+rpm -ivh kernel-debuginfo-3.10.0-123.el7.x86_64.rpm
+rpm -ivh kernel-debug-devel-3.10.0-123.el7.x86_64.rpm
+rpm -ivh kernel-headers-3.10.0-123.el7.x86_64.rpm
+
+打印调用某个函数的进程名称和进程ID
+
+[root@localhost home]# cat /home/trace.stp 
+#!/usr/bin/stap
+
+probe begin{
+        printf("now about to probe kernel\n");
+}
+probe kernel.function("sys_semop"),
+
+        kernel.function("sys_semctl"){
+        printf ("%s  (%d) \n", execname(), pid());
+}
+probe end{
+        printf("end this probe\n");
+}
+
+打印读写时间:
+这里需要注意的是，打印一个指针在前面加$.要取一个数组的值，要在后面加$。
+以后实践中慢慢看
+$bio->bi_bdev->bd_disk->disk_name$
+
+[root@localhost ~]# cat  /home/trace.stp 
+#!/usr/bin/stap
+
+probe begin{
+        printf("now about to probe kernel\n");
+}
+
+
+probe kernel.function("generic_make_request").call {
+
+        printf("%s %s %s %d \n", thread_indent(0), ppfunc(),$bio->bi_bdev->bd_disk->disk_name$,gettimeofday_us());
+
+}
+
+probe  module("raid456").function("raid5_end_read_request").return {
+
+        printf("%s %s %s %d \n", thread_indent(0), ppfunc(),$bi->bi_bdev->bd_disk->disk_name$,gettimeofday_us());
+
+}
+
+probe  module("raid456").function("raid5_end_write_request").return {
+
+        printf("%s %s %s %d \n", thread_indent(0), ppfunc(),$bi->bi_bdev->bd_disk->disk_name$,gettimeofday_us());
+}
+
+ 
+
+
+probe end{
+        printf("end this probe\n");
+}
+
+
+
+打印停止iRAID时，mddev的一个变量
+
+[root@localhost ~]# cat  /home/trace_stop.stp 
+#!/usr/bin/stap
+
+probe begin{
+        printf("now about to probe kernel\n");
+}
+probe module("md-mod").statement("do_md_stop")
+{
+         printf ("%s id (%d) open md \n", execname(), pid());
+         printf("$mddev$: %s\n", $mddev->openers$);
+}
+
+
+probe end{
+        printf("end this probe\n");
+}
+
+
+
+
+
+2017年7月28日19:54:24 打印数组信息：
+
+[root@localhost ~]# cat  /home/test.stp 
+#!/usr/bin/stap
+probe begin{
+
+        printf("now about to probe kernel\n");
+}
+
+probe module("md-mod").function("md_open")
+
+{
+
+       printf("%s\n",@var("gdisk@md.c")[0]->node->node_id$)
+       printf("%s\n",@var("gdisk@md.c")[2]->node->disk_id$)
+       printf("%s\n",@var("gdisk@md.c")[2]->node->disk_major$)
+       printf("%s\n",@var("gdisk@md.c")[2]->node->disk_minor$)
+       printf("%s\n",$gdisk[0]$$)
+
+}
+
+probe module("md-mod").function("set_disk_entry").return
+
+{
+         printf ("%s id (%d) return at %d \n", execname(), pid(),gettimeofday_us());
+}
+
+probe end{
+         printf("end this probe\n");
+}
+
+转义和字符串的判断
+[root@localhost home]# cat  /home/getbio.stp 
+#!/usr/bin/stap
+
+probe begin{
+                printf("now about to probe kernel\n");
+}
+
+probe  kernel.function("submit_bio") 
+{
+?
+        if ($bio->bi_bdev->bd_disk->disk_name$ != "\"hda\"") {
+                printf ("%s id (%d) exec submit_bio device name %s \n", execname(), pid(),$bio->bi_bdev->bd_disk->disk_name$);
+        }
+}
+
+
+probe end{
+                printf("end this probe\n");
+}
+
+
+
+#!/usr/bin/stap
+
+probe begin{
+                printf("now about to probe kernel\n");
+}
+
+probe  kernel.function("dio_bio_submit")
+{
+
+        if ($sdio->bio->bi_bdev->bd_disk->disk_name$ == "\"md1\"" ) {
+
+                printf ("%s id (%d) exec dio_bio_submit device name %s \n", execname(), pid(),$sdio->bio->bi_bdev->bd_disk->disk_name$);
+                printf ("sector:%s len:%s \n",$sdio->bio->bi_sector$,$sdio->bio->bi_size$);
+
+                print_backtrace();
+
+        }
+}
+
+
+probe end{
+                printf("end this probe\n");
+}
+
+
+
+调用过程：
+
+[root@localhost ~]# cat  /home/getdio.stp 
+#!/usr/bin/stap
+
+probe begin{
+                printf("now about to probe kernel\n");
+}
+
+probe kernel.statement("*@fs/?-io.c")   
+{
+        printf("entered %s \n",pp())
+}
+
+
+probe end{
+                printf("end this probe\n");
+}
+
+
+
+探测bitmap逻辑的脚本：
+
+
+[root@localhost ~]# cat  /home/test.stp 
+#!/usr/bin/stap
+
+probe begin{
+                printf("now about to probe kernel\n");
+}
+
+probe module("md-mod").statement("*@bitmap.c:2174") 
+{
+?     printf ("%s id (%d) entered into unlikely \n", execname(), pid());
+        printf("$bitmap$: %s\n", $bitmap$);
+}
+
+
+probe end{
+                printf("end this probe\n");
+}
+
+看bitmap是否进入2174行的脚本。 
+问题：怎么把局部变量打印出来？
+
+
+
+#!/usr/bin/stap
+
+probe begin{
+
+        printf("now about to probe kernel\n");
+
+}
+probe module("md-mod").statement("md_wakeup_thread")
+{
+        printf ("%s  (%d) \n", execname(), pid());
+        print_backtrace();
+        printf("\n\n");
+
+
+}
+
+probe module("raid456").statement("do_release_stripe")
+{
+
+        printf ("%s  (%d) \n", execname(), pid());
+        print_backtrace();
+        printf("\n\n");
+
+}
+
+probe end{
+
+        printf("end this probe\n");
+
+}
+
+systemtap使用全局变量 
+
+#!/usr/bin/stap
+global dm_count ;
+global _dm_count ;
+probe begin{
+
+        printf("now about to probe kernel\n");
+
+}
+
+
+probe  module("dm_mod").function("_dm_request")
+{
+                printf ("%s  (%d)  _dm_request\n", execname(), pid());
+                print_backtrace();
+                printf("\n\n");
+                _dm_count++;
+}
+
+
+probe  module("dm_mod").function("dm_request")
+{
+                printf ("%s  (%d)  \n", execname(), pid());
+                print_backtrace();
+                printf("\n\n");
+                dm_count++;
+}
+
+
+probe end{
+
+        printf("%d %d \n",dm_count,_dm_count);
+        printf("end this probe\n");
+
+}
+
+[root@localhost ~]# vim  /home/get_io.stp 
+#!/usr/bin/stap
+
+probe begin{
+
+        printf("now about to probe kernel\n");
+
+}
+
+
+probe module("dm-mirror").statement("*@dm-raid1.c:603") {
+                if (execname() != "systemd-udevd") {
+                        printf ("enter end bio %s  (%d) %s %ld %d \n", execname(), pid(),$bio->bi_bdev->bd_disk->disk_name$,
+                                                        $bio->bi_size,$error);
+                        print_backtrace();
+                        printf("\n\n");
+                }
+}
+
+
+probe module("dm-mirror").statement("hold_bio") {
+                if (execname() != "systemd-udevd") {
+                        printf ("enter end bio %s  (%d) %s %ld  \n", execname(), pid(),$bio->bi_bdev->bd_disk->disk_name$,
+                                                        $bio->bi_size);
+                        printf("ms->features %s ms->supend is %s\n",$ms->features$,$ms->suspend$);
+                        print_backtrace();
+                        printf("\n\n");
+                }
+} #parse_features
+
+
+probe module("dm-mirror").statement("*@dm-raid1.c:1008") {
+                if (execname() != "systemd-udevd") {
+                        print_backtrace();
+                        printf("\n\n");
+                }
+}
+
+probe end{
+        printf("end this probe\n");
+
+}
+
+
+数据类型的转换。用来转换出现空指针的情况。
+
+#!/usr/bin/stap
+probe begin{
+
+        printf("now about to probe kernel\n");
+
+}
+probe module("raid456").statement("make_request") {
+
+        printf("%s %d now about to make_request  \n",execname(),pid());
+        #cnf = @cast($mddev, "r5conf ")->private;
+        var=$mddev;
+        printf("%s\n", @cast(var,"mddev")$$); # value是变量的地址，后面是类型。
+        value=$mddev->private; 
+        printf("%s\n", @cast(value,"r5conf")$$); #mddev->private实际是一个空指针。
+??  printf("%d\n", @cast(value,"r5conf")->chunk_sectors); # 打印成员的某个变量用这种话方法
+
+}
+probe end{
+        printf("end this probe\n");
+}
+
+question 如果出现数组的情况，该怎么弄？
+
+#!/usr/bin/stap
+probe begin{
+       printf("now about to probe kernel\n");
+}
+
+probe module("raid456").statement("iraid_ops_run_io") {
+        printf("%s %d now about to make_request  \n",execname(),pid());
+        value=$sh->dev;
+        printf("%d\n", @cast(value,"r5dev")[1]->flags); #其中0和1表示素组的下标
+}
+
+probe end{
+        printf("end this probe\n");
+
+}
+
+经实践，也可以这样：
+printf("offset:%d, len:%d\n", $bi->bi_io_vec[1]->bv_offset, $bi->bi_io_vec[1]->bv_len);
+
+
+打印结构体数组的成员。要打印整个结构体也可以，这里涉及强制的类型转换的。
+#!/usr/bin/stap
+probe begin{
+        printf("now about to probe kernel\n");
+}
+probe module("raid456").statement("iraid_ops_run_io") {
+
+        printf("%s %d now about to make_request  \n",execname(),pid());
+        value=$sh->dev;
+        printf("%d\n", @cast(value,"r5dev")[0]->flags);
+        printf("%d\n", @cast(value,"r5dev")[1]->flags);
+        printf("%d\n", @cast(value,"r5dev")[2]->flags);
+        printf("%d\n", @cast(value,"r5dev")[3]->flags);
+        printf("%d\n", @cast(value,"r5dev")[4]->flags);
+        printf("%d\n", @cast(value,"r5dev")[5]->flags);
+        printf("%d\n", @cast(value,"r5dev")[6]->flags);
+        printf("%d\n", @cast(value,"r5dev")[7]->flags);
+        printf("%d\n", @cast(value,"r5dev")[8]->flags);
+        printf("%d\n", @cast(value,"r5dev")[9]->flags);
+}
+
+probe end{
+        printf("end this probe\n");
+
+}
+
+2017年11月11日15:58:16
+今天又一次实践了打印数组的方法。有些局部变量确实没法打印，肯以通过全局变量来打印出
+probe kernel.statement("*@bio.c:698") {
+
+        if (execname() == "dd") {
+                value = $bio->bi_io_vec;
+                printf("len is %d\n", @cast(value,"struct bio_vec")[64]->bv_len);
+?       }
+}
+
+还有一个实践是打印函数返回值：
+probe kernel.function("bio_add_page").return{
+        if (execname() == "dd") {
+                if ($return != 4096)
+                printf("return value is %d \n",$return);
+        }
+}
+
+
+模糊匹配使用下面的方式：
+ if (procname =~ "haproxy.*") {  
+        printf("%s[%d]: %s\n", procname, pid(), name);  
+    }
+
+
+
+systemtap 怎么查看，回调函数？!！
+[root@localhost home]# cat  /home/md.stp 
+#!/usr/bin/stap
+probe begin {  
+        printf("now we will probe linux kernel\n");
+}
+probe module("raid456").function("make_request"){
+        printf("%s %d %s \n",execname(),pid(),$bi->bi_end_io$);
+}
+probe end{
+        printf("now we will end probe \n");
+}
+
+[root@localhost home]# ./md.stp 
+now we will probe linux kernel
+dd 9036 <function>:0xffffffff811eaf60 
+dd 9036 <function>:0xffffffff811eaf60 
+
+[root@localhost home]# addr2line 0xffffffff811eaf60 -e /boot/vmlinux -f
+dio_bio_end_io
+/usr/src/debug/kernel-3.10.0-123.el7/linux-3.10.0-123.el7.x86_64/fs/direct-io.c:310
+
+
+systemtap打印局部变量(未尝试过)
+
+[root@localhost home]# cat  /home/mrebuild.stp 
+#!/usr/bin/stap
+probe begin {  
+        printf("now we will probe linux kernel\n");
+}
+
+probe module("md-mod").function("iraid_get_writable_mraid").call
+{
+        printf("%s %d \n",execname(),pid());
+        printf("viraid_cvr->out_offset is %d \n", $viraid_cvr->out_offset);
+        printf("time is %-25s \n", ctime(gettimeofday_s()));
+}
+
+probe module("md-mod").statement("*@iraid.c:16182")
+{
+        printf("p_iraid->m is %d \n", @var("p_iraid")->m);
+        printf("p_mraid->degraded si %d\n",@var("p_mraid")->degraded);
+        printf("mraid%d-%d \n", @var("extent_index"), @var("mraid_in_extent"));
+        printf("p_mraid->recovery is %d \n", @var("p_mraid")->recovery);
+}
+
+probe module("md-mod").function("iraid_get_writable_mraid").call
+{
+        printf("%s %d \n",execname(),pid());
+        printf("time is %-25s\n", ctime(gettimeofday_s()));
+        printf("====================== \n");
+}
+
+probe end{
+        printf("now we will end probe \n");
+}
+
+
+
+ 注意，打印字符串的时候，在后面加一个 $符号：如：@var("msg")$
+
+[root@localhost home]# vim /home/md.stp 
+#!/usr/bin/stap
+probe begin {
+                printf("now we will probe linux kernel\n");
+}
+
+probe module("md-mod").function("iraid_extc_init_extent") {
+
+                printf("exec into iraid_extc_add_iraid_list com:%s pid:%d \n",execname(),pid());
+}
+
+probe module("md-mod").statement("*@iraid_extent_cache.c:349") {
+
+                printf("msg is :%s \n",@var("msg")$); 
+}
+
+probe end{
+               printf("now we will end probe \n");
+}
+~
+
+打印局部变量：
+
+[root@localhost ~]# cat  /home/md.stp 
+#!/usr/bin/stap
+probe begin {  
+                printf("now we will probe linux kernel\n");
+}
+probe module("raid456").statement("*@raid5.c:355") {
+       
+                printf("%s %d diskname is %s sector is %d \n",execname(),pid(),@var("bi")->bi_bdev->bd_disk->disk_name$,@var("bi")->bi_sector);
+
+}
+probe end{
+               printf("now we will end probe \n");
+}
+
+
+2018年5月22日21:00:05
+1、修改内核变量
+?
+
+2、执行的时候使用 stap -g xxx.stp 1000 ;这样才能修改。1000是时间，也是第一个参数。
+
+
+结论:
+1、bio下发到 阵列上的时候，自带了bi_flags被设置为uptodate
+2、如果出错，会bio_endio(bio,-EIO)；在bio_endio里面会清除uptodate
+3、handle_stripe中；出现handle_failed_stripe 会清除掉该flag。
+
+
+2018年7月8日21:50:45
+
+#!/usr/bin/stap
+probe begin {  
+                printf("now we will probe linux kernel\n");
+}
+
+
+
+probe kernel.function("generic_file_direct_write").call {
+
+                printf("%s write %s enter time %ld offset %ld count %d ocount %d \n",execname(),$iocb->ki_filp->f_path->dentry->d_iname$,gettimeofday_us(),$pos,$count,$ocount);
+
+
+}
+probe kernel.function("generic_file_direct_write").return {
+
+                printf("%s write %s out   time %ld offset %ld count %d ocount %d \n",execname(),$iocb->ki_filp->f_path->dentry->d_iname$,gettimeofday_us(),$pos,$count,$ocount);
+
+}
+
+
+probe end{
+                printf("now we will end probe \n");
+}
+
+
+stap -l 可以查看某个函数在哪个文件的哪一行定义的，可以是内核代码也可以是用户态代码
+
+$stap -l 'process("/usr/lib64/libjemalloc.so.2").function("malloc")'
+process("/usr/lib64/libjemalloc.so.2").function("malloc@/usr/include/stdlib.h:465")
+
+stap -L 可以看函数中的哪些变量可以被看到,后面写脚本时可以直接引用这些变量
+
+stap -L 'kernel.function("move_freepages")'
+kernel.function("move_freepages@mm/page_alloc.c:938") $zone:struct zone* $start_page:struct page* $end_page:struct page* $migratetype:int
+
+stap -L 'process("/usr/lib64/libjemalloc.so.2").function("malloc")'
+process("/usr/lib64/libjemalloc.so.2").function("malloc@/usr/include/stdlib.h:465") $size:size_t $usize:size_t
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,1239 @@
+ 2017年4月18日17:07:09
+开始sheepdog的学习
+首先学习sheepdog的用法：
+1、启动sheepdog的集群：
+sheep  /mnt/sheep -c zookeeper:10.192.40.196:2181
+关于sheep的用法，可以执行  sheep -c查看
+
+2、格式化集群
+dog cluster format
+
+3、创建一个sheepdog卷。卷名为vol-name
+dog vdi create vol-name 2G
+
+还有一些其他的操作：
+dog vdi read v1 offset length
+dog vdi write v1 offset len < content
+dog vdi read v1 1024 55
+echo test | dog vdi write v1 1024 5
+
+
+另外，需要注意：
+
+[root@localhost mnt]# ls -l /usr/sbin/collie 
+lrwxrwxrwx 1 root root 13 Apr 19 00:15 /usr/sbin/collie -> /usr/sbin/dog
+有些文档中写的，collie命令其实就是dog命令
+
+问题：
+1、创建的卷，在哪里？
+2、怎么让磁盘被sheepdog用起来？
+3、怎么做硬盘域的概念？
+
+关于sheepdog 很好的资料 
+https://github.com/sheepdog/sheepdog/wiki/Getting-Started
+https://github.com/sheepdog/sheepdog/wiki/Multi-disk-on-Single-Node-Support
+
+参考命令：
+sheep /meta/md1 ,/data/disk1 -y 1.1.1.1 -z 1 -p 7001 -c zookeeper:2.2.2.2/test
+sheep /meta/md2 ,/data/disk2 -y 1.1.1.1 -z 1 -p 7002 -c zookeeper:2.2.2.2/test
+sheep /meta/md3 ,/data/disk3 -y 1.1.1.1 -z 2 -p 7003 -c zookeeper:2.2.2.2/test
+sheep /meta/md4 ,/data/disk4 -y 1.1.1.1 -z 2 -p 7004 -c zookeeper:2.2.2.2/test
+
+
+------------------------------------------------------------------------------
+华丽的分割线
+------------------------------------------------------------------------------
+
+配置步骤：
+(1)、格式化磁盘
+
+执行下面的步骤
+mkfs.ext3 /dev/sdb
+mkfs.ext3 /dev/sdc
+mkfs.ext3 /dev/sdd
+mkfs.ext3 /dev/sde
+mkfs.ext3 /dev/sdf
+mkfs.ext3 /dev/sdg
+
+由于需要输入 y 考虑使用：
+echo y |mkfs.ext3  /dev/sdb
+
+为减少输入，使用下面的命令
+for node in sd{b..g} ;do echo y |mkfs.ext3  /dev/$node;done
+
+(2)、创建挂载点
+ #mkdir {/data1,/data2,/data3,/data4,/data5,/data6}
+ mkdir /data{1..6}
+
+(3)、将磁盘挂载到挂载点
+ mount /dev/sdb /data1
+ mount /dev/sdc /data2
+ mount /dev/sdd /data3
+ mount /dev/sde /data4
+ mount /dev/sdf /data5
+ mount /dev/sdg /data6
+
+备注：
+#!/bin/bash
+list=`echo {b..z}`
+for node in $list
+do
+        disk[${i}]=$node
+        let i++
+done
+#echo "${disk[1]}"
+list=`echo {1..24}`
+
+for node in $list
+do
+        num[${j}]=$node
+        let j++
+done
+for((i=0;i<24;i++)) #24盘位
+do
+        echo "mount /dev/sd${disk[$i]}  /data${num[$i]}"
+done
+
+
+(4)、增加挂载的参数
+
+ for i in {1..6} ; do mount -o remount,user_xattr /data$i ;sleep 1 ;done
+(5)、创建元数据目录
+ mkdir /md{1..6}
+(6)、启动sheepdog（注意IP，本例为10.192.40.196，可以使用vim修改）
+ 然后执行： 
+ sheep /md1,/data1 -y 10.192.40.196 -z 1 -p 7000 -c zookeeper:10.192.40.196:2181
+ sheep /md2,/data2 -y 10.192.40.196 -z 1 -p 7001 -c zookeeper:10.192.40.196:2181
+ sheep /md3,/data3 -y 10.192.40.196 -z 2 -p 7002 -c zookeeper:10.192.40.196:2181
+ sheep /md4,/data4 -y 10.192.40.196 -z 2 -p 7003 -c zookeeper:10.192.40.196:2181
+ sheep /md5,/data5 -y 10.192.40.196 -z 3 -p 7004 -c zookeeper:10.192.40.196:2181
+ sheep /md6,/data6 -y 10.192.40.196 -z 3 -p 7005 -c zookeeper:10.192.40.196:2181
+
+举例，在24盘位上，可以用下面的命令生成
+
+#!/bin/bash
+[ $# -ne 1 ] && echo "bad argu $#" && exit 0; 
+for((i=1;i<=24;i++))
+do
+        echo "sheep /md$i,/data$i -y $1 -z $(((($i-1)/5)+1)) -p $((7000+$i)) -c zookeeper:$1:2181"
+done
+
+
+注意：-p要从7000开始，否则会创建失败。这里分别划分了三个zone
+
+[root@localhost /]# dog node list
+  Id   Host:Port         V-Nodes       Zone
+   0   10.192.40.196:7000       128          1
+   1   10.192.40.196:7001       128          1
+   2   10.192.40.196:7002       128          2
+   3   10.192.40.196:7003       128          2
+   4   10.192.40.196:7004       128          3
+   5   10.192.40.196:7005       128          3
+[root@localhost /]# 
+
+再执行：
+dog cluster format
+ok！至此，node配置完毕
+
+创建卷
+dog vdi create test 20G
+
+然后开始读写vdi
+
+[root@localhost /]# echo test | dog vdi write v0 1024 5 //5表示写5个字节
+Failed to open VDI v0 (snapshot id: 0 snapshot tag: ): No VDI found
+[root@localhost /]# echo test | dog vdi write vol-name 1024 5
+[root@localhost /]# 
+[root@localhost /]# dog vdi read vol-name 1024 55
+test
+
+如何用dd来读写卷组？
+
+信息写入卷组：
+
+history |dog vdi write vol-name
+
+dd if=/root/file |dog vdi write vol-name 
+
+dog vdi write volume </home/histor.txt （也可以用这种方式）
+
+2017年4月19日20:39:50
+今天简单跟踪了下:
+dog node list的流程：
+(1)、根据node list两个参数，构造函数 node_list 
+并在577行，通过ret = command_fn(argc, argv); 调用，进入到node.c中的 node_list函数
+该函数也很简单，就是遍历一颗红黑树，然后打印信息。
+那么：应该是在创建的时候，就插入红黑树咯？
+
+
+几个概念：
+vdi
+vid
+oid
+
+/*
+ * Object ID rules
+ *
+ *  0 - 31 (32 bits): data object space
+ * 32 - 55 (24 bits): VDI object space
+ * 56 - 59 ( 4 bits): reserved VDI object space
+ * 60 - 63 ( 4 bits): object type identifier space
+ */
+
+110010110101011001011010
+
+000000000000000000000000000000000000110010110101011001011010
+
+
+1100101101010110010110100 0000000000000000000000000000000
+
+
+
+
+
+注意：
+1、在不同节点上配置时，要使用不同的ip
+2、删除data1，data2这样的目录前，需要先umount，否则无法删除,因为有磁盘挂在它上面
+
+2017年5月5日20:02:37
+#!/bin/bash
+umount /dev/sd*
+rm -rf /data*
+rm -rf /md*
+
+/home/sheepdog/zookeeper-3.4.6/bin/zkServer.sh start
+sleep 5
+for node in sd{b..g} ;do echo y |mkfs.ext3  /dev/$node;done
+mkdir /data{1..6}
+mount /dev/sdb /data1
+mount /dev/sdc /data2
+mount /dev/sdd /data3
+mount /dev/sde /data4
+mount /dev/sdf /data5
+mount /dev/sdg /data6
+for i in {1..6} ; do mount -o remount,user_xattr /data$i ;sleep 1 ;done
+mkdir /md{1..6}
+sheep /md1,/data1 -y 10.192.40.198 -z 1 -p 7000 -c zookeeper:10.192.40.198:2181
+sheep /md2,/data2 -y 10.192.40.198 -z 2 -p 7001 -c zookeeper:10.192.40.198:2181
+sheep /md3,/data3 -y 10.192.40.198 -z 3 -p 7002 -c zookeeper:10.192.40.198:2181
+sheep /md4,/data4 -y 10.192.40.198 -z 4 -p 7003 -c zookeeper:10.192.40.198:2181
+sheep /md5,/data5 -y 10.192.40.198 -z 5 -p 7004 -c zookeeper:10.192.40.198:2181
+sheep /md6,/data6 -y 10.192.40.198 -z 6 -p 7005 -c zookeeper:10.192.40.198:2181
+sleep 10 # or you will fail
+dog cluster format -c 3
+
+
+常见错误：
+[root@localhost sheepdog]# dog node list
+failed to connect to 127.0.0.1:7000: Connection refused
+failed to connect to 127.0.0.1:7000: Connection refused
+Failed to get node list
+注意：启动sheep的时候，端口号从7000开始
+
+
+
+这是在40.198上编写的配置脚本。
+其他节点，用vim，:%s/10.192.40.198/10.192.xx.xx/g
+注意，是冒号以后。而不是/来替换。
+
+另外，耗时较长的一个操作
+for node in sd{b..g} ;do echo y |mkfs.ext3  /dev/$node;done
+并不是每次都要格式化，格式化一次，以后能写就行
+磁盘多的时候，可以考虑：
+for node in sd{b..g} ;do echo y |mkfs.ext3  /dev/$node & ;done
+
+
+
+00cb565a00000000
+1010110000101011000
+
+
+我写了一个history数据进去，然后是下面的情况：
+[root@localhost /]# ls  data*
+data1:
+00cb565a00000000
+
+data2:
+80cb565a00000000
+
+data3:
+
+data4:
+00cb565a00000000  80cb565a00000000
+
+data5:
+
+data6:
+00cb565a00000000  80cb565a00000000
+
+这样看来，数据有一份。但它有三个副本。分别在data4和data6上。
+在data2上有一个数据，也有三个副本。
+
+我再写一次，成下面的样子：
+[root@localhost ~]# ls  /data*
+/data1:
+00cb565a00000000  00cb565a00000001
+
+/data2:
+80cb565a00000000
+
+/data3:
+
+/data4:
+00cb565a00000000  00cb565a00000001  80cb565a00000000
+
+/data5:
+00cb565a00000001
+
+/data6:
+00cb565a00000000  80cb565a00000000
+[root@localhost ~]# dog vdi list
+  Name        Id    Size    Used  Shared    Creation time   VDI id  Copies  Tag
+  vol          0  1.0 GB  8.0 MB  0.0 MB 2017-05-06 04:04   cb565a      3       
+
+data1上，有两份数据！
+同时，第二份数据有也有两个副本，在data4和data5上
+
+
+创建了两个一样大的vdi
+
+[root@localhost /]# dog vdi list
+  Name        Id    Size    Used  Shared    Creation time   VDI id  Copies  Tag
+  volume       0  1.0 GB  0.0 MB  0.0 MB 2017-05-06 04:25   3cf0cf      3              
+  vol          0  1.0 GB   20 MB  0.0 MB 2017-05-06 04:04   cb565a      3  
+他们的vdi id不一样，差别好像还不小。所以，该id和大小应该没关系，也许和名字有关。
+
+
+2017年5月5日21:03:27
+[root@localhost /]# dog vdi create vol 1G
+[root@localhost /]# ls  /data*
+/data1:
+
+/data2:
+80cb565a00000000
+
+/data3:
+
+/data4:
+80cb565a00000000
+
+/data5:
+
+/data6:
+80cb565a00000000
+[root@localhost /]# dog vdi create test 1G
+[root@localhost /]# 
+[root@localhost /]# ls  /data*
+/data1:
+
+/data2:
+807c2b2500000000  80cb565a00000000
+
+/data3:
+
+/data4:
+807c2b2500000000  80cb565a00000000
+
+/data5:
+807c2b2500000000
+
+/data6:
+80cb565a00000000
+
+从这个来看创建一个vdi，不写数据；不写数据，也会有三个副本。应该是元数据咯。
+
+附：创建ec卷：
+dog vdi create -c 4:2 vol 1G
+问：创建ec卷，数据怎么分布的？
+
+创建过程中，貌似请求是发给getway的，也就是7000端口那个程序
+(gdb) c
+Continuing.
+[Switching to Thread 0x7f288b7fe700 (LWP 9557)]
+
+Breakpoint 1, vdi_create (iocb=0x7f288b7fc5c0, new_vid=0x7f288b7fc5ac) at vdi.c:1308
+1308    {
+(gdb) where          0x7f288b7fc5ac
+#0  vdi_create (iocb=0x7f288b7fc5c0, new_vid=0x7f288b7fc5ac) at vdi.c:1308
+#1  0x0000000000415905 in cluster_new_vdi (req=0x7f28780008c0) at ops.c:114
+#2  0x000000000041714c in do_process_work (work=0x7f2878000980) at ops.c:1991
+#3  0x0000000000434813 in worker_routine (arg=0x22146e0) at work.c:367
+#4  0x00007f2894320df3 in start_thread () from /lib64/libpthread.so.0
+#5  0x00007f289392a3dd in clone () from /lib64/libc.so.6
+(gdb) info thread
+
+然后，进入到do_process_work中去
+
+
+(gdb) p sizeof(sys->vdi_inuse) //2M
+$20 = 2097152
+
+
+
+
+创建,删除，均进入 vdi_lookup
+如果创建，vdi_lookup应该是返回SD_RES_NO_VDI，这样才可以创建
+如果是删除，应该返回SD_RES_SUCCESS,这样才可以删除
+同时，删除应该是进了两次vdi_lookup。
+如下：
+
+Breakpoint 5, vdi_lookup (iocb=iocb@entry=0x7f149e7fa5b0, info=info@entry=0x7f149e7fa590) at vdi.c:1243
+1243    {
+#0  vdi_lookup (iocb=iocb@entry=0x7f149e7fa5b0, info=info@entry=0x7f149e7fa590) at vdi.c:1243
+#1  0x0000000000414bf6 in cluster_get_vdi_info (req=0x7f141c0008c0) at ops.c:228
+#2  0x000000000041714c in do_process_work (work=0x7f141c000980) at ops.c:1991
+#3  0x0000000000434813 in worker_routine (arg=0x20e86e0) at work.c:367
+#4  0x00007f14a730cdf3 in start_thread () from /lib64/libpthread.so.0
+#5  0x00007f14a69163dd in clone () from /lib64/libc.so.6
+cluster_get_vdi_info (req=0x7f141c0008c0) at ops.c:229
+229             if (ret != SD_RES_SUCCESS)
+Value returned is $9 = 0
+(gdb) c
+Continuing.
+
+Breakpoint 5, vdi_lookup (iocb=iocb@entry=0x7f149e7fa5c0, info=info@entry=0x7f149e7fa580) at vdi.c:1243
+1243    {
+#0  vdi_lookup (iocb=iocb@entry=0x7f149e7fa5c0, info=info@entry=0x7f149e7fa580) at vdi.c:1243
+#1  0x00000000004126b0 in vdi_delete (iocb=iocb@entry=0x7f149e7fa5c0, req=<optimized out>) at vdi.c:1556
+#2  0x00000000004151a3 in cluster_del_vdi (req=<optimized out>) at ops.c:160
+#3  0x000000000041714c in do_process_work (work=0x7f141c000980) at ops.c:1991
+#4  0x0000000000434813 in worker_routine (arg=0x20e86e0) at work.c:367
+#5  0x00007f14a730cdf3 in start_thread () from /lib64/libpthread.so.0
+#6  0x00007f14a69163dd in clone () from /lib64/libc.so.6
+vdi_delete (iocb=iocb@entry=0x7f149e7fa5c0, req=<optimized out>) at vdi.c:1557
+1557            if (ret != SD_RES_SUCCESS)
+
+
+ 
+
+
+
+
+没有创建和创建一次以后，sys->vdi_inuse的差距
+
+{0 <repeats 2717 times>, 2048, 0 <repeats 59685 times>, 67076096, 0 <repeats 145813 times>, 4227858432, 0 <repeats 53926 times>}
+{0 <repeats 2717 times>, 2048, 0 <repeats 59685 times>, 67076096, 0 <repeats 145813 times>, 8522825728, 0 <repeats 53926 times>}
+
+4227858432  111111000000000000000000000000000  
+8522825728  111111100000000000000000000000000
+差了一位：
+再次创建：
+从：
+     {0 <repeats 2717 times>, 2048, 0 <repeats 59685 times>, 67076096, 0 <repeats 145813 times>, 8522825728, 0 <repeats 53926 times>}
+变为：
+$2 = {0 <repeats 2717 times>, 2048, 0 <repeats 59685 times>, 134184960, 0 <repeats 145813 times>, 8522825728, 0 <repeats 53926 times>}
+67076096  111111111110000000000000000
+134184960 111111111111000000000000000 
+
+又多了一位：
+总之，创建完一个，就有一位被设置。
+至于，是哪一位被设置，则由hash算法决定。
+
+
+
+写的时候，视乎走的下面这个逻辑：
+Breakpoint 1, xpwrite (fd=fd@entry=60, buf=<optimized out>, count=4, offset=<optimized out>) at util.c:240
+240                     ssize_t written = _pwrite(fd, p, count, offset);
+#0  xpwrite (fd=fd@entry=60, buf=<optimized out>, count=4, offset=<optimized out>) at util.c:240
+#1  0x0000000000423fc0 in default_write (oid=9280606427443888128, iocb=0x7f14237fc5e0) at store/plain_store.c:137
+#2  0x0000000000413fb6 in peer_write_obj (req=<optimized out>) at ops.c:1018
+#3  0x000000000041714c in do_process_work (work=0x7f148c000980) at ops.c:1991
+#4  0x0000000000434813 in worker_routine (arg=0x20e8080) at work.c:367
+#5  0x00007f14a730cdf3 in start_thread () from /lib64/libpthread.so.0
+#6  0x00007f14a69163dd in clone () from /lib64/libc.so.6
+[Thread 0x7f14237fe700 (LWP 22052) exited]
+[Switching to Thread 0x7f14227fc700 (LWP 2878)]
+
+vdi_write是写vdi的函数：
+total = min(total, inode->vdi_size - offset); /*写之前有一个计算，比如我要写1G，但是容量只有512M，那只写512M*/
+	idx = offset / SD_DATA_OBJ_SIZE;
+	offset %= SD_DATA_OBJ_SIZE;
+	while (done < total) {
+		 ...
+		done += len;
+	}
+
+然后，计算offset。先计算，offset，落在哪个obj上，然后再计算出写的位置，对于当前obj的偏移
+
+	idx = offset / SD_DATA_OBJ_SIZE;
+	offset %= SD_DATA_OBJ_SIZE;
+
+
+写的时候，进入了 
+get_store_path(oid, iocb->ec_index, path);
+这个貌似可以获取到
+/data1/003cf0da00000011 
+这样的目录 
+
+这里，不一样的，主要还是oid这个东西，在写之前，有一个：
+
+
+		sd_inode_set_vid(inode, idx, inode->vdi_id);
+		oid = vid_to_data_oid(inode->vdi_id, idx);
+		ret = dog_write_object(oid, old_oid, buf, len, offset, flags,
+				      inode->nr_copies, inode->copy_policy,
+				      create, false);
+当然，在这之前，还有一个：
+
+		vdi_id = sd_inode_get_vid(inode, idx);
+		if (!vdi_id)
+			create = true;
+		else if (!is_data_obj_writeable(inode, idx)) {
+			create = true;
+			old_oid = vid_to_data_oid(vdi_id, idx);
+		}
+
+所以，猜测，它会先获取vdi_id
+然后，根据inode和index来看，这个data obj是否可写
+question：是否可写的标准是什么？
+如果不可写，做了一个vdi_to_data_oid【它是把vdi id左移了32位】
+oid貌似，是 vid <<32 |idx
+
+那么，vdi write的时候，怎么就写到其他盘上去了，比如，写副本的时候？
+另外，ec卷的写实怎样一个过程？
+
+删除完了以后，貌似vdi_inuse貌似并无改变
+
+$3 = {0 <repeats 2717 times>, 2048, 0 <repeats 59685 times>, 134184960, 0 <repeats 145813 times>, 8522825728, 0 <repeats 53926 times>}
+
+$5 = {0 <repeats 2717 times>, 2048, 0 <repeats 59685 times>, 134184960, 0 <repeats 145813 times>, 17112760320, 0 <repeats 53926 times>}
+
+111111100000000000000000000000000  8522825728
+1111111100000000000000000000000000 17112760320
+又多设置了一位：
+问题：为什么同样的name，设置的位不同？
+
+
+
+2017年5月16日20:55:42
+
+1、重新配置了sheepdog
+2、gdb attach到进程上看，发现 
+
+(gdb) p sys->vdi_inuse
+$1 = {0 <repeats 262144 times>}
+(gdb) 
+未创建时，vdi_inuse全部为0
+
+$1 = {0 <repeats 262144 times>}
+$4 = {0 <repeats 208217 times>, 67108864, 0 <repeats 53926 times>}
+
+100000000000000000000000000  67108864
+被设置了一位
+那么，为什么是，208217这一位呢？
+
+
+
+Breakpoint 8, post_cluster_new_vdi (req=0x7fff89388f78, rsp=0x7fff89388fa8, data=0x7fff89388fd8, sender=0x7fff89388f08) at ops.c:124
+124     {
+(gdb) p sys->vdi_inuse
+$21 = {0 <repeats 10696 times>, 18014398509481984, 0 <repeats 51706 times>, 32768, 0 <repeats 64744 times>, 137438953472, 0 <repeats 81068 times>, 67108864, 0 <repeats 41445 times>, 18014398509481984, 
+  0 <repeats 12480 times>}
+(gdb) finish
+Run till exit from #0  post_cluster_new_vdi (req=0x7fff89388f78, rsp=0x7fff89388fa8, data=0x7fff89388fd8, sender=0x7fff89388f08) at ops.c:124
+0x00000000004088bc in sd_notify_handler (sender=sender@entry=0x7fff89388f08, data=data@entry=0x7fff89388f78, data_len=<optimized out>) at group.c:978
+978                     ret = do_process_main(op, &msg->req, &msg->rsp, msg->data,
+Value returned is $22 = 0
+(gdb) p sys->vdi_inuse
+$23 = {0 <repeats 10696 times>, 18014398509481984, 0 <repeats 51706 times>, 32768, 0 <repeats 8854 times>, 36028797018963968, 0 <repeats 55889 times>, 137438953472, 0 <repeats 81068 times>, 67108864, 
+  0 <repeats 41445 times>, 18014398509481984, 0 <repeats 12480 times>}
+
+上面这一段，表明：
+进入 post_cluster_new_vdi 函数前还未被设置，退出 post_cluster_new_vdi后，被设置了
+可以大概断定，是它设置的。
+
+
+
+
+(gdb) p rsp->vdi.vdi_id
+$25 = 3910677
+
+$26 = {0 <repeats 10696 times>, 18014398509481984, 0 <repeats 51706 times>, 32768, 0 <repeats 8854 times>, 36028797018963968, 0 <repeats 4594 times>, 34359738368, 0 <repeats 51294 times>, 137438953472, 
+  0 <repeats 81068 times>, 67108864, 0 <repeats 41445 times>, 18014398509481984, 0 <repeats 12480 times>}
+
+$28 = {0 <repeats 10696 times>, 18014398509481984, 0 <repeats 50407 times>, 2097152, 0 <repeats 1298 times>, 32768, 0 <repeats 8854 times>, 36028797018963968, 0 <repeats 4594 times>, 34359738368, 
+  0 <repeats 51294 times>, 137438953472, 0 <repeats 81068 times>, 67108864, 0 <repeats 41445 times>, 18014398509481984, 0 <repeats 12480 times>}
+
+
+
+
+
+1000000000000000000000000000000000000000000000000000000
+
+10696+55+ 50407
+
+
+
+
+
+
+
+
+$2 = 13325914
+(gdb) finish
+Run till exit from #0  post_cluster_new_vdi (req=0x7fffea434208, rsp=0x7fffea434238, data=0x7fffea434268, sender=0x7fffea434198) at ops.c:124
+0x00000000004088bc in sd_notify_handler (sender=sender@entry=0x7fffea434198, data=data@entry=0x7fffea434208, data_len=<optimized out>) at group.c:978
+978                     ret = do_process_main(op, &msg->req, &msg->rsp, msg->data,
+Value returned is $3 = 0
+(gdb) p sys->vdi_inuse
+$4 = {0 <repeats 208217 times>, 67108864, 0 <repeats 53926 times>}
+(gdb) c
+
+13325914/64 = 208217.40625
+这是什么意思？
+13325914%64 = 26
+100000000000000000000000000
+
+static inline void atomic_set_bit(int nr, unsigned long *addr)
+{
+	uatomic_or(addr + nr / BITS_PER_LONG, 1UL << (nr % BITS_PER_LONG));
+}
+
+设置从 addr + nr / BITS_PER_LONG 开始
+就是，越过，多少个64bit 然后，再将 1<< n位 设置为1.如上图，就是设置了1<<26 位为1.
+那么，问题是，为什么是 13325914 ?
+
+今日遗留问题：
+1、同一个vol创建多次，它会怎么办？如何解决冲突？
+2、看起来像是找了next free bit
+3、此时，它的vdi怎么返回的？
+
+
+vdi是多少？
+64位如何构成？
+是不是，rsp->vdi_id就是最后的id？
+明日解决：
+
+
+[root@localhost ~]# dog vdi list
+  Name        Id    Size    Used  Shared    Creation time   VDI id  Copies  Tag
+  vol          0  1.0 GB  0.0 MB  0.0 MB 2017-05-18 05:11   cb565a      3      
+
+
+13325914  =  cb565a
+这个好像，恰好是，free bit
+
+*
+ * Return SUCCESS (range of bits set):
+ * Iff we get a bitmap range [left, right) that VDI might be set between. if
+ * right < start, this means a wrap around case where we should examine the
+ * two split ranges, [left, SD_NR_VDIS - 1] and [0, right). 'Right' is the free
+ * bit that might be used by newly created VDI.
+ *
+ * Otherwise:
+ * Return NO_VDI (bit not set) or FULL_VDI (bitmap fully set)
+ */
+
+1、创建以后，设置了一个bitmap，在哪儿设置呢？根据卷名称计算了一个hash值。那一位就是vdi的ID
+2、创建完成以后，再删除，删除不清除该bit
+3、创建完成以后，删除，又以同样的名称创建，则在前面设置那个vdi的bit右边一位设置，并且把vid的id设置为该位的下标
+
+
+info->free_bit = right;
+*new_vid = info.free_bit;
+通过这样的转换，把vdi id找出来了.vdi id是怎样影响读写的呢？
+
+那么，data_obj又是怎么来的呢？
+
+
+/*
+ * Object ID rules
+ *
+ *  0 - 31 (32 bits): data object space
+ * 32 - 55 (24 bits): VDI object space
+ * 56 - 59 ( 4 bits): reserved VDI object space
+ * 60 - 63 ( 4 bits): object type identifier space
+ */
+static inline uint64_t vid_to_vdi_oid(uint32_t vid)
+{
+	return VDI_BIT | ((uint64_t)vid << VDI_SPACE_SHIFT);
+}
+vdi_to_vdi_oid 是怎么做的呢？
+
+用1 << 63 |vid<<32位
+那就是说，最高位，用以识别是什么object 32-55是vdi 的id 
+
+
+(gdb) p oid
+$13 = 57234364819308544
+
+100010000111010100010101100000
+100010000111010100010101100000
+
+读写的过程，走到了下面
+
+Breakpoint 3, gateway_forward_request (req=0x7fd1cc0008c0) at gateway.c:472
+472             int i, err_ret = SD_RES_SUCCESS, ret;
+(gdb) where
+#0  gateway_forward_request (req=0x7fd1cc0008c0) at gateway.c:472
+#1  0x00000000004124b2 in gateway_write_obj (req=0x7fd1cc0008c0) at gateway.c:698
+#2  0x000000000041cb37 in do_process_work (work=0x7fd1cc000980) at ops.c:1991
+#3  0x000000000043f8f3 in worker_routine (arg=0x20aae60) at work.c:367
+#4  0x00007fd1ea467df3 in start_thread () from /lib64/libpthread.so.0
+#5  0x00007fd1e9a713dd in clone () from /lib64/libc.so.6
+
+
+	gateway_init_fwd_hdr(&hdr, &req->rq);
+	oid_to_nodes(oid, &req->vinfo->vroot, nr_copies, target_nodes);
+	forward_info_init(&fi, nr_copies);
+
+oid_to_nodes这个函数有点意思,从oid转换到node中去
+
+static inline void oid_to_nodes(uint64_t oid, struct rb_root *root,
+				int nr_copies,
+				const struct sd_node **nodes)
+{
+	const struct sd_vnode *vnodes[SD_MAX_COPIES];
+
+	oid_to_vnodes(oid, root, nr_copies, vnodes);//
+	for (int i = 0; i < nr_copies; i++)
+		nodes[i] = vnodes[i]->node;
+}
+
+* Replica are placed along the ring one by one with different zones */
+
+static inline void oid_to_vnodes(uint64_t oid, struct rb_root *root,
+				 int nr_copies,
+				 const struct sd_vnode **vnodes)
+{
+     在这个函数中
+}
+
+把副本，按照环一个一个的放置，放到不同的磁盘上
+那么，ec呢？是怎么做的？放到了磁盘的哪个位置上呢？
+
+
+从打印的信息来看，每次写4M。并不是连续的4M。
+
+
+
+这几个函数有点意思：
+现在看来，
+
+#define VDI_BIT (UINT64_C(1) << 63)
+#define VMSTATE_BIT (UINT64_C(1) << 62)
+#define VDI_ATTR_BIT (UINT64_C(1) << 61)
+#define VDI_BTREE_BIT (UINT64_C(1) << 60)
+#define LEDGER_BIT (UINT64_C(1) << 59)
+
+
+貌似，被写过了以后，vdi_id就会被写入到 inode->data_vdi_id中。
+比如，我们写过了15个object，inode->data_vdi_id这个数组里面就有一个成员被设置为vdi_id
+
+uint64_t oid, uint64_t cow_oid,
+
+
+#0  hval_to_vdisk (hval=1264323429370243498) at store/md.c:60
+#1  0x000000000042afc3 in oid_to_vdisk (oid=9280606401674084352) at store/md.c:67
+#2  0x000000000042bedc in md_get_object_dir_nolock (oid=9280606401674084352) at store/md.c:393
+#3  0x000000000042bf10 in md_get_object_dir (oid=9280606401674084352) at store/md.c:402
+#4  0x000000000042eb05 in default_link (oid=9280606401674084352, tgt_epoch=19) at store/plain_store.c:392
+#5  0x000000000041e268 in recover_object_from (row=0x2890170, node=0x2890710, tgt_epoch=20, wildcard=false) at recovery.c:293
+#6  0x000000000041e467 in recover_object_from_replica (row=0x2890170, old=0x286e580, tgt_epoch=20) at recovery.c:358
+#7  0x000000000041e717 in recover_replication_object (row=0x2890170) at recovery.c:453
+#8  0x000000000041edb7 in do_recover_object (row=0x2890170) at recovery.c:602
+#9  0x000000000041ef1b in recover_object_work (work=0x2890190) at recovery.c:634
+#10 0x000000000043f8f3 in worker_routine (arg=0x28532d0) at work.c:367
+#11 0x00007f4578865df3 in start_thread () from /lib64/libpthread.so.0
+#12 0x00007f4577e6f3dd in clone () from /lib64/libc.so.6
+
+
+
+2017年6月22日20:39:33
+
+
+1、vdi，oid，怎么转换到对于的写位置的？
+
+
+2017年6月22日20:50:46
+
+红黑树的使用：
+
+下面这篇文章写得非常好
+http://www.cnblogs.com/haippy/archive/2012/09/02/2668099.html
+在使用内核的红黑树时，需将 struct rb_node 结构包含在自己的数据结构中，比如：
+
+  struct mynode {
+      struct rb_node node;
+      char *string;
+      /*more stuff of your structure hereby*/
+  };
+在sheepdog的代码中，你可以看到下面两个数据结构：
+
+struct disk {
+	struct rb_node rb;
+	char path[PATH_MAX];
+	uint64_t space;
+};
+
+struct vdisk {
+	struct rb_node rb;
+	const struct disk *disk;
+	uint64_t hash;
+};
+
+
+struct sd_vnode {
+	struct rb_node rb;
+	const struct sd_node *node;
+	uint64_t hash;
+};
+
+看起来前面三个是节点？后面这个貌似不是酱紫的。
+
+struct rb_root {
+	struct rb_node *rb_node;
+};
+
+奇怪，这个root实际就是一个rb_node呢？！
+vnode_info的vroot和nroot是什么意思？！
+
+struct vnode_info {
+	struct rb_root vroot;
+	struct rb_root nroot;
+	int nr_nodes;
+	int nr_zones;
+	refcnt_t refcnt;
+};
+
+
+
+
+为了使用内核提供的红黑树，你需要自己实现插入和查找函数,并实现释放某一节点的函数。
+其实，还需要实现自己的一个compare的函数.例如，sheepdog中的 vdisk_cmp，node_cmp,vnode_cmp等等
+思考：如何在gdb中打印红黑树的子节点？
+sheepdog中的vdisk的红黑树基本是这个样子：
+(1)、用disk的path算一个hash值 
+(2)、然后插入节点
+(3)、查找时，根据哈希值来查找
+
+貌似，oid -->sd的过程是：
+(1)、根据oid算出一个hash值
+(2)、根据hash值，在vdisk的红黑树中，找到一个节点。该节点也就对应了一块磁盘
+
+
+问题：
+会不会多个oid，hash到一个磁盘上?!
+代码怎么保证了，不同的oid会哈希到不同的磁盘上？
+另外，oid怎么来的？
+
+写一个卷之前，实际只拿到了一个卷的名称
+
+struct sd_inode {
+	char name[SD_MAX_VDI_LEN];
+	char tag[SD_MAX_VDI_TAG_LEN];
+	uint64_t create_time;
+	uint64_t snap_ctime;
+	uint64_t vm_clock_nsec;
+	uint64_t vdi_size;
+	uint64_t vm_state_size;
+	uint8_t  copy_policy;
+	uint8_t  store_policy;
+	uint8_t  nr_copies;
+	uint8_t  block_size_shift;
+	uint32_t snap_id;
+	uint32_t vdi_id;
+	uint32_t parent_vdi_id;
+ uint32_t btree_counter;
+	uint32_t __unused[OLD_MAX_CHILDREN - 1];
+
+	uint32_t data_vdi_id[SD_INODE_DATA_INDEX]; //32M
+	struct generation_reference gref[SD_INODE_DATA_INDEX]; //1<<20 *64 = 64M
+};
+这个东西看起来很大呢？
+
+
+
+在dog这边，vdi_write前，先调用了 read_vdi_obj来获取vdi和inode的信息。
+question：vdi应该是通过hash值计算出来的；inode怎么获取的？
+写之前，inode信息怎么被get到的？
+
+sd_inode_set_vid(inode, idx, inode->vdi_id);//这个函数，有点深.回来再看；
+
+
+问题：write的时候，为什么会调用两次 dog_write_object ？
+一次提前调用了，一次是 if (create) 调用了 
+
+通过实验来看，写的时候：第一次调用 dog_write_object，实际会把数据写入到指定的位置。
+但这个时候，调用dog vdi read vol 读不出来。
+要使用：sd_inode_write_vid 以后，才能读出来。
+(1)、sheep中，第一次调用 gateway_create_and_write_obj,buffer中存的是数据
+(2)、sheep中，第二次调用 gateway_write_obj，数据是 vid.
+(3)、sheep中，还调用了一次 gateway_write_obj.问题：什么时调用的？!
+
+如果，该位置已经被写过，则不会再调用：if (create) 里面的代码。因为create会为false。
+
+dog中，获取inode信息时，调用了 
+
+read_vdi_obj --> dog_read_object 给sheep发消息
+
+sheep收到消息以后  --> gateway_read_obj --> gateway_replication_read
+这时候，他会读，非本节点的副本信息。
+这里的inode信息，就是我们最开始看到的，创建完成以后的多份文件吧？
+
+问题1：文件的内容可以看到不？//需要用其他的办法来读。
+问题2：写完该文件是否会更新？//会更新。
+当，我们写一个超过4M的文件发现，该文件的更新时间，与其他写入的副本文件一样，是更新的。
+同事，当我们第一次写一个文件。写完以后，再写一次，发现该文件的被访问时间有下面的变化。
+Access: 2017-06-26 01:30:08.339955732 +0800
+Access: 2017-06-26 01:31:29.912950870 +0800
+因此：该文件被访问了。
+
+创建了vdi以后，实际是创建了多个元数据文件，分布在不同的文件夹下。
+当我们需要去读写该卷的时候，首先是获取vid信息和inode信息，这个时候，就需要从元数据文件中去读取。
+但往往读取的不是本节点的：dog中调用如下：
+read_vdi_obj --> dog_read_object
+sheep中调用： gateway_read_obj --> gateway_replication_read
+同时，需要知道，写入数据写入到卷中，是哪个入口？
+dog_write_object，有一个参数buf，可能是写入数据，也可能是写入vid等。具体的要看是如如何调用的。
+
+问题：直接写，和create的写，的差异在哪里？后面一次写，vid写到哪里去了？起了什么作用？
+
+副本的虚拟节点，怎么计算的？
+
+这个函数有点意思：
+
+/* Replica are placed along the ring one by one with different zones */
+static inline void oid_to_vnodes(uint64_t oid, struct rb_root *root,
+				 int nr_copies,
+				 const struct sd_vnode **vnodes)
+{
+	const struct sd_vnode *next = oid_to_first_vnode(oid, root);
+
+	vnodes[0] = next;
+	for (int i = 1; i < nr_copies; i++) {
+next:
+		next = rb_entry(rb_next(&next->rb), struct sd_vnode, rb);
+		if (!next) /* Wrap around */
+			next = rb_entry(rb_first(root), struct sd_vnode, rb);
+		if (unlikely(next == vnodes[0]))
+			panic("can't find a valid vnode");
+		for (int j = 0; j < i; j++)
+			if (same_zone(vnodes[j], next))
+				goto next;
+		vnodes[i] = next;
+	}
+
+首先获取了第一个虚拟节点，然后继续找。只找了nr_copies这个虚拟节点？
+把这个看懂了，应该能明白点儿啥了。
+
+
+gdb可以这样打印？
+
+p  ((struct sd_node *)((char*)(md.root) - (char*)&(((struct sd_node *) 0)->rb)))
+这个是什么意思？
+事实证明，后面那一堆为0.因为rb是结构体中的第一个成员，所以该成员相对于结构的便宜就为0.
+p (char*) &((struct sd_node *) 0)->rb
+值为0，表示 rb的地址，刚好就是：
+
+struct sd_node {
+	struct rb_node  rb;
+	struct node_id  nid;
+	uint16_t	nr_vnodes;
+	uint32_t	zone;
+	uint64_t        space;
+};
+
+这样，rb的地址，就刚好是sd_node的地址。也就是，说：
+如果，rb是结构体的第一个成员，那么，rb的地址，就刚好是通过rb挂接在红黑树中的这个结构体的地址。
+
+所以，以后看成员的哈希值啥的？是不是就方便很多啦？
+明天再看：
+
+p  ((struct sd_node *)((char*)(md.root) - (char*)&(((struct sd_node *) 0)->rb)))
+这个愿意是：找到md.root的地址以后，也就是rb的地址了。然后如果rb相对于结构体的偏移为rb，那么结构体sd_node 的地址就要相对md.root-偏移。
+
+addr_of_rb = A
+offset = ((struct sd_node *) 0)->rb
+addr_of_struct = ((struct sd_node *)(A-offset))
+
+大多数时候，我们都能拿到A值，然后需要求出：addr_of_struct
+因此，如果rb或entry，是结构体里面的第一个成员的话，addr_of_struct = A 。
+
+
+(gdb) p *(struct sd_node *)((char*)(md.root)->rb_node->rb_right)
+$14 = {
+  rb = {
+    rb_parent_color = 31694736, 
+    rb_right = 0x0, 
+    rb_left = 0x0
+  }, 
+  nid = {
+    addr = "/data6\000\000\000\000\000\000\000\000\000", 
+    port = 0, 
+    io_addr = '\000' <repeats 15 times>, 
+    io_port = 0, 
+    pad = "\000\000\000"
+  }, 
+  nr_vnodes = 0, 
+  zone = 0, 
+  space = 0, 
+  disks = 0x1e3ccf0
+}
+
+打印几颗红黑树得到上面的信息。
+这里很有意思：
+rb_parent_color包含两个信息。节点的最低一位表示，该节点的颜色。
+然后rb_parent_color的值是父节点的地址
+以本例为例子：
+(gdb) p md.root
+$15 = {
+  rb_node = 0x1e39f90
+}
+rb的rb_parent_color = 31694736,换算成16进制也就是 0x1e38f90。
+
+创建vdi以后，写入到文件中的应该是，一个sd_node的信息：
+
+(gdb) p sizeof(struct sd_inode)
+$1 = 12587576
+(gdb) detach
+
+[root@localhost ~]# ls -l /data*
+/data1:
+total 8
+-rw-r----- 1 root root 12587576 Jun 28 04:34 80cb565a00000000
+-rw-r----- 1 root root 12587576 Jun 28 04:36 80f3cff600000000
+
+/data2:
+total 8
+-rw-r----- 1 root root 12587576 Jun 28 04:34 80cb565a00000000
+-rw-r----- 1 root root 12587576 Jun 28 04:36 80f3cff600000000
+
+/data3:
+total 0
+
+/data4:
+total 0
+
+/data5:
+total 4
+-rw-r----- 1 root root 12587576 Jun 28 04:34 80cb565a00000000
+
+/data6:
+total 4
+-rw-r----- 1 root root 12587576 Jun 28 04:36 80f3cff600000000
+
+
+问题1：写时分配的vdi和不写时分配的vdi，有什么区别？
+明天可以看一个写实分配的例子，然后打印下它的结构体，两者有什么差异？
+问题2：dog vdi read的时候，怎么知道去哪里读？读哪个信息？！直接找到文件了吗？
+
+
+sheepdog的日志，在/md*的目录下，会有日志
+
+Jul 02 21:59:09   INFO [main] md_add_disk(368) /data1, vdisk nr 150, total disk 1
+Jul 02 21:59:09   INFO [main] send_join_request(1042) IPv4 ip:10.192.40.198 port:7000 going to join the cluster
+Jul 02 21:59:09   INFO [main] create_work_queues(529) net workqueue is created as dynamic
+Jul 02 21:59:09   INFO [main] create_work_queues(536) gway workqueue is created as dynamic
+Jul 02 21:59:09   INFO [main] create_work_queues(543) io workqueue is created as dynamic
+Jul 02 21:59:09   INFO [main] create_work_queues(550) recovery workqueue is created as dynamic
+Jul 02 21:59:09   INFO [main] create_work_queues(560) async_req workqueue is created as dynamic
+
+
+
+
+
+如何模拟一个recovery ？
+
+[root@localhost ~]# ls -lh /data*
+/data1:
+total 11M
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000000_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000001_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000002_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000003_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000004_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000006_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000007_2
+-rw-r----- 1 root root  13M Jul  6 05:41 803cf0cf00000000
+
+/data2:
+total 13M
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000000_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000001_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000002_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000003_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000004_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000005_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000006_0
+
+/data3:
+total 13M
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000000_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000001_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000002_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000003_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000004_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000005_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000006_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000007_1
+-rw-r----- 1 root root  13M Jul  6 05:41 803cf0cf00000000
+
+/data4:
+total 2.1M
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000005_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000007_0
+-rw-r----- 1 root root  13M Jul  6 05:41 803cf0cf00000000
+
+/data5:
+total 0
+
+
+重构完以后
+
+
+[root@localhost ~]# ls -lh /data*
+/data1:
+total 6.1M
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000000_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000001_0
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000002_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000003_0
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000004_0
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000005_2
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000006_1
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000007_1
+-rw-r----- 1 root root  13M Jul  6 05:41 803cf0cf00000000
+
+/data2:
+total 4.1M
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000000_1
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000001_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000002_0
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000003_1
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000004_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000005_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000006_0
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000007_2
+-rw-r----- 1 root root  13M Jul  6 05:42 803cf0cf00000000
+
+/data3:
+total 13M
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000000_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000001_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000002_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000003_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000004_0
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000005_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000006_1
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000007_1
+-rw-r----- 1 root root  13M Jul  6 05:41 803cf0cf00000000
+
+/data4:
+total 16K
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000000_2
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000001_2
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000002_2
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000003_2
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000004_2
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000005_1
+-rw-r----- 1 root root 2.0M Jul  6 05:42 003cf0cf00000006_2
+-rw-r----- 1 root root 2.0M Jul  6 05:41 003cf0cf00000007_0
+-rw-r----- 1 root root  13M Jul  6 05:41 803cf0cf00000000
+
+
+
+
+模拟重构的过程：
+1、创建一个4个sheep的集群
+2、然后创建2:1的ec卷
+3、然后杀掉其中一个sheep
+4、看各目录下的文件个数
+
+dog vdi create volume -c 2:1 40G -P
+
+[root@localhost ~]# dog node recovery info
+Nodes In Recovery:
+  Id   Host:Port         V-Nodes       Zone       Progress
+   0   10.192.40.198:7000    127          1       33.6%
+   1   10.192.40.198:7001    128          2       36.4%
+   2   10.192.40.198:7003    129          4       37.6%
+重构完了，是这个情况：
+
+[root@localhost ~]# dog node recovery info
+Nodes In Recovery:
+  Id   Host:Port         V-Nodes       Zone       Progress
+
+
+[root@localhost ~]# ls -l /data* |grep total
+total 144
+total 48
+total 144
+total 144
+问题：为什么是48 而不是144 ？
+更奇怪的是，里面有1w多个文件。晕啊！！！
+
+[root@localhost ~]# ls -l /data* |grep total
+sheepdog中有几颗红黑树呢？
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+question：sheepdog中，mount一个区域坏了。能不能立即找到它所在iRAID和对应的位置。
+
+
+
+2019年1月30日21:56:24
+struct header {
+	uint64_t used;
+	uint64_t nr_free;
+};
+
+struct free_desc {
+	uint64_t start;
+	uint64_t count;
+};
+
+ *            +-------------------------------+
+ *            |                               |
+ *            |  sorted list               v------v
+ * +--------------------------------+-----------------------+     +--------+
+ * | Header | fd1 | fd2 | ... | fdN | .... object data .... | <-- | bitmap |
+ * +--------------------------------+-----------------------+     +---------
+ * |<--           4M             -->|
+ *
+
+header放在最前面，并且记录，used和nr_free
+
+static inline uint32_t oalloc_meta_length(struct header *hd)
+{
+	return sizeof(struct header) + sizeof(struct free_desc) * hd->nr_free;
+}
+/*这里应该是返回，object_data分配区域相对于bitmap的偏移*/
+首先是header的长度 + 空闲的的desc所占用的长度。
+question：空闲的越来越少，object data会越来越靠前吗？也就是，前面的那个函数返回值会越来越小吗？
+
+
+#define HEADER_TO_FREE_DESC(hd) ((struct free_desc *) \
+				 ((char *)hd + sizeof(struct header)))
+返回一个 free_desc *型的指针。这个指针的偏移是： struct header的长度 + hd的长度。
+所以，这个hd = fd * N 。这样，就定位到了 fd上。
+
+#define MAX_FREE_DESC ((SD_DATA_OBJ_SIZE - sizeof(struct header)) / \
+		       sizeof(struct free_desc))
+
+最大的free的个数。（1<< 22 - header的长度）/free_desc的长度
+那么，就是说。1 << 22 恰好是 4M。然后，4M - header的长度 正好可以认为是用来存储fdx的空间。
+这样，大概最多可以存65536个fd;
+
+
+  
+
+
+
+
+
+
+
+
+
+
