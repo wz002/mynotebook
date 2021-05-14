@@ -1,0 +1,353 @@
+//在线刻卡 55.201上执行
+/home/product_img/auto_carve_card.sh /nas/nas/dd_img/iraid/DS-A8X0XXSD-V2_CN_STD_9.2.0_V300R001C007_20181026_CVR3.1.7_DOCKER_BASE.img 10.192.59.40 55555 9b648 1
+//查看刻卡进度
+tail /nas/nas/dd_img/product_log/10.192.57.191/progress_dd.log -f
+
+//手动刻卡
+dd if=/nas/nas/dd_img/iraid/31x_SK/DS-A8X0XXSD-V2_CN_STD_9.2.0_V300R001C007_20180920_CVR317-beta_SIT2_DOCKER_BASE.img of=/dev/hdb bs=10M
+
+//刻卡后打产线升级包
+
+//一键清理
+2005页面账号密码  oem_admin  368904531
+
+//一键清理前设置IP
+vim /etc/rc.local
+/b_iscsi/bn_cli/CLI-IRAID ip-modify br0 10.192.53.192 255.255.255.0 10.192.53.254 0 1 
+//记得改回正常！！！
+
+//一键清理后修改IP
+mkdir /mnt/hdb 先创建一个文件夹
+mount /dev/hdb1 /mnt/hdb  把刻的卡对应的hdb1挂载到创建的文件夹
+cd /mnt/hdc/etc/sysconfig/network-scripts 
+ls
+找到ifcfg-eth0
+vi ifcfg-eth0 修改IP
+IPADDR=10.192.54.63
+NETMASK=255.255.255.0
+GATEWAY=10.192.54.254
+然后 cd /
+umount /mnt/hdc  去上层目录 
+
+//打升级包
+resolve_bios XXX.bin
+
+//检查磁盘
+CLI-DISK-FW -f
+/b_iscsi/bin/report_all_scsi_device_info -d
+
+//添加磁盘兼容
+/b_iscsi/config/support_disk_type.conf
+/b_iscsi/config/support_disk_type.conf_12G
+
+//双控改单控 配置文件334行
+/b_iscsi/http/web/global.php
+
+//修改环控表：
+/b_iscsi/bn_cli/environinfo_conf_manage -a get -n enviroinfo_current_table_name
+/b_iscsi/config/enviro_config/config_tables/  
+ 
+//智能录像模式凑齐满盘  echo 24
+vim /b_iscsi/bin/get_device_disk_total.sh
+
+//踢盘，加盘
+//先查看磁盘SAS slot  //对比 bcli pool disklist 
+/b_iscsi/bin/report_all_scsi_device_info -d
+
+/b_iscsi/bin/ses_interface.sh --action=diskpull --obj=0x5000cbaab0005e3e.22
+/b_iscsi/bin/ses_interface.sh --action=diskinsert --obj=0x5000cbaab0005e3e.22
+
+避免踢盘后通过冷启动找回：
+touch /etc/iraid/disks/no-coldrestart
+踢盘sdw：
+echo 1 > /sys/block/sdw/device/device_kicked
+找回：
+/b_iscsi/bin/ses_interface.sh --obj=0x5000cbaa7023e43e.24 --action=coldrestart
+
+//查看重组
+bcli iraid monitor
+ctrl+z 退出
+bcli iraid monitor exit
+
+//查看虚拟化开关
+cat /sys/block/md<iraid_id>/md/iraid/virtual
+//查看所有iraid虚拟化开关状态
+bcli iraid virtual -g alliraid
+//设置开，关
+bcli iraid virtual -s 1 -m [on|off]
+
+//查看虚拟化阈值
+cat /sys/block/md<iraid_id>/md/iraid/virtual_threshold
+
+//查看iraid细节信息
+/root/iraid/TOOLS/iraid_detail_graph.sh
+/root/iraid/TOOLS/iraid-graph-detail.sh 1000
+
+//自定义协议->资源路径
+//摄像头
+hikvision://10.192.57.176:8000:0:0username=admin&password=Abc123456  
+
+vmstat -n 2 | awk '{print strftime("[%Y-%m-%d %H:%M:%S]"),$0}' 
+top -d 2
+iostat -x 2 | grep -v dm
+
+//重构速度
+for ((i=1;i<=12;i++)); do echo 0 > /sys/block/md$i/md/sync_speed_min; echo 0 > /sys/block/md$i/md/sync_speed_max; done
+for ((i=1;i<=12;i++)); do echo system > /sys/block/md$i/md/sync_speed_min; echo system > /sys/block/md$i/md/sync_speed_max; done
+
+//将iraid标脏  让其可以重构
+echo 1 > /sys/block/md1/md/bitmap_set_all 
+echo 1 > /sys/block/md1/md/w_mraid_set_all
+
+//录像
+docker exec  b_cvr_record_0   /opt/dvrCmd/dt  modifyRecordSwitchSize 10
+
+while [ 1 ];do id=`bcli meta list |grep -v  ^# |awk '$2==18{print $5}' |sed s'/\./ /g'|awk '{print $1}'`;if [ "$id" -lt "6" ];then  docker exec  b_cvr_record_0   /opt/dvrCmd/dt  modifyRecordSwitchSize 100;break;else echo =======$id=====;sleep 10;fi;done 
+
+//磁盘元数据位置
+/etc/iraid/iraid-meta/create/
+
+//双控，检测另一台
+bcli dm ls /home/ -X 2 -S 
+//当前节点信息
+cat /etc/iraid/node/local_node.conf 
+
+//查看标注结果
+cat use.log|sed s'/:\|-\|=/ /g' |awk '{print  $10,$12}'|while read a ;do OIFS=$IFS; IFS=" "; set -- $a;disk=$1;seg=$2; IFS=$OIFS;echo $disk $seg;bcli meta show $disk |grep -v ^# |awk ''$seg'==$1{print $6}';done
+
+scp -r root@43.224.34.73:/home/cpfile /root
+scp -r /root/lk root@43.224.34.73:/home/cpfile
+
+//业务读写
+bcli dm cat /sys/kernel/scst_tgt/trace_cmds 
+
+//读local元数据
+/root/iraid/bin/cli-meta -L extent -r 1 
+ 
+sed -i '/"hik_sd21"/s/^/#/g' /home/wangzhe/60-persistent-bsp.rules.bak
+
+probe kernel.function("blk_account_io_done").return
+$bi->bi_sector
+$bi->bi_bdev->bd_disk->disk_name$,
+
+//dd
+dd if=/dev/zero of=/home/zhe/file oflag=direct bs=512k count=1
+//查看dd进度
+watch -n 1 pkill -USR1 ^dd$
+
+//创建小iraid
+bcli iraid create -p C_pool0_0 AUTO 100G 4K 7 8+8:0 -w 1 -v 0 -r 1
+bcli iraid create AUTO 100G 4K 7 8+8:0 -w 1 -v 0 -r 1
+//创建小iraid
+bcli iraid create -p IRAID mete-LXJ 400G 8k 7 8+8:0 -w 1 -v 0 -r 1 -z -g 1 
+
+//反汇编
+objdump -D -l /root/iraid/driver/raid456.ko > /home/raid5.txt
+
+//磁盘检测工具日志位置
+cat /tmp/device_test.log
+
+//换卡失败
+echo >/b_iscsi/config/system_recover_status
+/b_iscsi/bn_cli/delete_share_disk_info
+
+//docker
+//查看容器名称
+docker ps
+//登陆容器
+dcli docker console --name=`docker ps | grep -v IMAGE | awk '{print $NF}'`
+
+//模拟断外网
+mv /b_iscsi/bin/docker_start /b_iscsi/bin/docker_start_bak
+/b_iscsi/bin/docker_start
+/root/iraid/TOOLS/extranet_breakdown.sh 90
+mv /b_iscsi/bin/docker_start_bak /b_iscsi/bin/docker_start
+
+//查看Btree
+vi /b_iscsi/log/310_err_stor_info.log 
+stor_hd_auto_repair  关键词
+
+//查看录像丢帧
+vi /b_iscsi/log/310_watchdog.log 
+overflow  关键词
+
+//录像中无录像
+/opt/dvrCmd/recorderChanInfo 1
+//I帧时间
+IFRAME ARRAY:
+  [ 0] 2018-11-26 18:05:34 idx(37760)
+  [ 1] 2018-11-26 18:05:35 idx(290216)
+
+get_progress_list rc.local
+
+//查看udev信息
+udevadm monitor
+udevadm info --query=all --name=sda
+//获取信息
+udevadm info -a -p $(udevadm info -q path -n /dev/md1)
+其中udevadm info -q path -n /dev/md1返回sysfs中的设备路径
+
+//查看iraid页面信息
+/root/iraid/bin/iraid_sup ui --iraid_list=al
+
+crash /boot/vmlinux
+crash> mod -s md_mod md-mod.ko
+
+//消除报警
+cli-alarm generate-alarm -r 0x5f00 -a all
+
+bcli lvm set_lun_user  -i lun_id   -u  CVR 
+
+/etc/zkserver/home/bin/zkCli.sh
+
+//raid5
+mdadm -CR -v /dev/md1 -l 5 -n 3 /dev/sdb /dev/sdc /dev/sdd -x 1 /dev/sde --bitmap=internal --assume-clean --force
+//raid1
+mdadm -CR -v /dev/md2 -l 1 -n 2 /dev/sdf /dev/sdg --bitmap=internal --assume-clean --force
+
+//read
+dd if=/dev/md258 of=/home/wz/file.log oflag=direct bs=512k count=2048
+//write
+dd if=/home/wz/file.log of=/dev/md258 oflag=direct bs=512k count=2048
+
+//死机日志，kdump，crash相关
+/boot/crash_vmcore.sh
+/var/deadlog/
+
+3726 GB
+5589 GB
+7452 GB
+9314 GB
+13039 GB
+
+//crash: ps排序
+cat crash_ps |awk '{print $NF}'|sort |uniq -c|sort -n -k 1
+
+
+scripts/setup.sh
+app/nvmf_tgt/nvmf_tgt &
+//查看bdev设备
+scripts/rpc.py bdev_get_bdevs
+//挂载控制器
+scripts/rpc.py bdev_nvme_attach_controller -b Nvme0 -t PCIe -a 0000:00:0e.0
+scripts/rpc.py bdev_nvme_get_controllers 
+//卸载控制器
+scripts/rpc.py bdev_nvme_detach_controller Nvme0
+
+//创建AIO设备
+scripts/rpc.py bdev_aio_create /dev/sdb aio0
+scripts/rpc.py bdev_aio_create /dev/sdc aio1
+scripts/rpc.py bdev_aio_create /dev/sdd aio2
+scripts/rpc.py bdev_aio_create /dev/sde aio3
+scripts/rpc.py bdev_aio_create /dev/sdf aio4
+
+//查看Raid设备
+scripts/rpc.py bdev_raid_get_bdevs all
+//1、Nvme创建Raid，条带64K
+scripts/rpc.py bdev_raid_create -n Raid0 -z 64 -r 0 -b "Nvme0n1 Nvme1n1 Nvme2n1 Nvme3n1 Nvme4n1"
+//2、AIO创建Raid，条带64K
+scripts/rpc.py bdev_raid_create -n Raid0 -z 64 -r 0 -b "aio0 aio1 aio2 aio3 aio4"
+//Raid创建lvstore
+scripts/rpc.py bdev_lvol_create_lvstore Raid0 lvs
+
+//查看卷组lvs设备
+scripts/rpc.py bdev_lvol_get_lvstores
+//lvstore创建lvol，大小1024M
+scripts/rpc.py bdev_lvol_create lvol0 4194304 -l lvs -t
+scripts/rpc.py bdev_lvol_create lvol1 1024 -l lvs -t
+
+Nvme0n1 Nvme1n1 Nvme2n1 Nvme3n1 Nvme4n1
+
+[Nvme]
+  TransportID "trtype:PCIe traddr:0000:b3:00.0" Nvme0
+  TransportID "trtype:PCIe traddr:0000:b5:00.0" Nvme1
+  TransportID "trtype:PCIe traddr:0000:ba:00.0" Nvme2
+  TransportID "trtype:PCIe traddr:0000:bb:00.0" Nvme3
+  TransportID "trtype:PCIe traddr:0000:bc:00.0" Nvme4
+[RAID0]
+  Name Raid0
+  RaidLevel 0
+  StripSize 64
+  NumDevices 4
+  Devices Nvme0n1 Nvme1n1 Nvme2n1 Nvme3n1
+
+//快照
+scripts/rpc.py bdev_lvol_snapshot lvs0/lvol0_1 lvol_snapshot0_1
+//克隆
+scripts/rpc.py bdev_lvol_clone lvs0/lvol_snapshot0_1 lvol_clone0_1
+
+yum install --downloadonly --downloaddir=/home/java java
+
+//清除磁盘标记
+for i in `bcli disk list|grep -v '#' |awk '{print $9}'`;do CLI-DISK-FW -E iraid -m $i;done
+
+
+//查看页面密码
+cat /b_iscsi/config/isapiusers
+
+cat /sys/block/sdtiera/tier/device_usage
+
+
+cli_storage -a get -c LVM_REPORT_LV -i "lv_name:thin_pool vg_name:%s"
+
+cli_storage -a del -c POOL_DELETE -i id:1 
+cli_pool -a get -c POOL_ALL_IDNAME 
+
+cli_storage -a set -c LVM_RENAME_LV -i "lv_name_new:%s lv_name_old:%s vg_name:%s"
+
+gcc -o svr-lun svr-daemon.c -llog -lczmq 
+
+
+Refusing activation of partial LV pool_linear_1/thin_pool.  Use '--activationmode partial' to override.
+
+
+bcli db tree /mod/iraid/2 | grep virtual 
+
+
+Thin pool volume with chunk size 4.00 MiB can address at most 1012.00 TiB of data.
+
+
+sycn_public_config
+
+
+extc_unplug_delay_lock_work:4950:***ERROR***: ===delay_unlock===RSYNC-UNLOCK==
+
+
+fio -group_reporting -name=test -ioengine=libaio -filename=/dev/vg2/lv2 -direct=1 -rw=read -bs=1M -numjobs=1
+
+/root/vdbench/vdbench -f /root/vdbench/examples/filesys/random_rw -o /home/out -jn
+
+
+cat /etc/drbd.d/wangzhe.res |grep drbd|uniq
+
+iscsiadm -m node -u
+
+iscsiadm -m node -l
+
+
+iscsiadm -m discovery -t st -p 10.192.38.190
+
+iscsiadm -m node -T iqn.2020-12.com.hikvision.ssan.storos.t-2 -l
+
+
+drbdadm primary --force wangzhe
+
+drbdadm secondary wangzhe
+
+drbdadm down wangzhe
+
+mysql -u root -p -h 10.192.45.19
+
+
+
+专家模式
+vim /b_iscsi/config/iraid_relevant.conf
+
+
+
+[root@localhost ~]# cat /etc/mdadm.conf 
+ARRAY /dev/md/1  metadata=1.2 UUID=84d78cb7:41776507:5df2bb6a:25e4db15 name=localhost.localdomain:1
+[root@localhost ~]# mdadm -Es /dev/sdw
+ARRAY /dev/md/1  metadata=1.2 UUID=84d78cb7:41776507:5df2bb6a:25e4db15 name=localhost.localdomain:1
+[root@localhost ~]# mdadm -Es /dev/sdy
+ARRAY /dev/md/1  metadata=1.2 UUID=84d78cb7:41776507:5df2bb6a:25e4db15 name=localhost.localdomain:1
