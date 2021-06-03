@@ -1,0 +1,551 @@
+ISA-L:Erasure Code的编译和测试
+基于EC的开源实现技术
+现今，基于纠删码的开源实现技术主要有Intel ISA-L、Jerasure等库，以下就来简单介绍一下这两种库：
+（一）Intel ISA-L
+Intel ISA-L（Intelligent Storage Acceleration Library），即英特尔智能存储加速库，是英特尔公司开发的一套专门用来加速和优化基于英特尔架构（IntelArchitecture，IA）存储的lib库，可在多种英特尔处理器上运行，能够更大程度提高存储吞吐量，安全性和灵活性，并减少空间使用量。 ISA-L库可在存储数据可恢复性、数据完整性性、数据安全性以及加速数据压缩等方面提供帮助，并提供了一组高度优化的功能函数，主要有：EC纠删码函数、RAID函数、CRC（Cyclic Redundancy Check）循环冗余检查函数、MBH（Multi Buffer Hash）缓冲散列函数、加密函数、Compression压缩函数等。其中EC纠删码函数可以加速任何以GF(28)为编/解码矩阵的RS类纠删码的计算速度。
+
+（二）Jerasure
+Jerasure是美国田纳西大学Plank教授开发的C/C++纠删码函数库，提供Reed-Solomon和Cauchy Reed-Solomon两种编码算法的实现。Jerasure有1.2和 2.0两个常用版本，Jerasure 2.0为目前的最新版本，可借助intel sse指令集来加速编解码，相比1.2版本有较大的提升。 Jerasure库分为5个模块，每个模块包括一个头文件和实现文件。
+（1）galois.h/galois.c：提供了Galois Field Arithmetic伽罗华域算术运算。
+（2）jerasure.j/jerasure.c：依赖于galois模块，可为绝大部分的纠删码提供核心函数，其中这些核心函数支持基于矩阵的编码与解码、基于位矩阵的编码与解码、位矩阵变换、矩阵转置和位矩阵转置。
+（3）reed sol.h/reed sol.c：支持RS编/解码和优化后的RS编码。
+（4）cauchy.h/cauchy.c：支持柯西RS编解码和最优柯西RS编码。
+（5）liberation.h/liberation.c：支持Liberation RAID-6编码、Blaum-Roth编码和Liber8tion编码。其中，Liberation RAID-6是一种基于二进制矩阵的最低密度MDS编码，其性能在相同参数设置下，较RS编码和柯西RS编码更好。
+（三）Intel ISA VS Jerasure
+Intel ISA-L库和Jerasure库都能加速RS码的计算速度。其中，ISA-L 库对于加速RS码的计算速度效果更好，是目前业界更佳。ISA-L之所以速度快，主要原因在于Intel 在ISA-L的实现中大量使用了汇编代码，如使用AES-NI、SSE、AVX、AVX2等指令集来提高计算速度、将整体矩阵的运算搬迁到汇编中进行等，虽然这提高了ISA-L的效率性，但大大降低ISA-L代码的可读性和可维护性。ISA-L支持Vandermonde、Cauchy两种编码矩阵，但其中Vandermonde矩阵使用直接拼接单位矩阵的方式作为其编码矩阵，出现了矩阵线性相关等问题。
+虽然Jerasure2.0库较ISA-L 库对于加速RS码的计算速度效果略差，但是Jerasure2.0库在存储应用中仍具有一些ISA-L 库所没有的优势，如Jerasure2.0使用 C 语言封装后的指令，提高了代码的可读性和可维护性，让代码更加友好。另外Jerasure2.0还支持更多有限域的计算，如GF(28)、GF(216)、GF(232)等有限域，并且还支持柯西RS编码、Liberation RAID-6编码、Blaum-Roth编码等其他编码。Jerasure库不但具有极高的学术价值，而且在工业应用中的使用也极为广泛，如在存储应用中开源的Ceph分布式存储系统就是使用Jerasure库作为默认的纠删码库。
+
+ISA-L编译
+下载最新isa-l库
+	https://github.com/intel/isa-l/tree/v2.29.0
+	此次最新版本为2.29.0, 2020年2月发布。主要对于parity6+奇偶校验的EC性能改进，所以此次验证主要验证该性能是否提升。
+编译环境要求
+x86_64：
+汇编程序：nasm v2.11.01或更高版本（建议在AVX512支持下构建nasm v2.13或更高版本）或yasm 1.2.0或更高版本。
+
+编译器：gcc、clang、icc或VC编译器。
+（1）查看yasm版本
+	[root@localhost isa-l-2.29.0]# yasm --version
+yasm 1.2.0
+Compiled on Feb 17 2014.
+Copyright (c) 2001-2011 Peter Johnson and other Yasm developers.
+Run yasm --license for licensing overview and summary.
+（2）查看nasm版本
+	[root@localhost isa-l-2.29.0]# nasm --version
+NASM version 2.14.02 compiled on Dec 26 2018
+配置相关编译环境
+（1）升级gcc，本文升级到8.3.0，具体操作参考下述章节“升级gcc版本”。
+（2）升级cmake，本文升级到3.12.0-rc1，具体操作参考下述章节“升级cmake版本”。
+（3）安装boost库，本位安装的是boost_1_64_0，具体操作参考下述章节“安装boost库”。
+（3）配置其他编译环境所需软件
+除了gcc、cmake和boost库需要手动配置以外，以上编译环境依赖的其他软件可以用yum安装方式安装（前提是设备可以联网，并且yum源可以下载到满足要求的软件版本）：
+yum install git autogen autoconf automake yasm nasm libtool libboost-all-dev
+注：其中yasm nasm两个软件在上面编译ISA-L库的时候若已经安装过，则此处不需要安装，若不小心这里也安装了，则需要检测其版本是否满足ISA-L所需，即：nasm v2.11.01或更高版本（建议在AVX512支持下构建nasm v2.13或更高版本）或yasm 1.2.0或更高版本。
+
+安装最新版本ISA-L
+编译安装isa-l-2.29.0
+（1）要使用自动工具构建和安装库，通常只需运行
+tar -zxvf isa-l-2.29.0.tar.gz
+cd isa-l-2.29.0
+./autogen.sh
+./configure --prefix=/usr --libdir=/usr/lib64
+make
+make install
+（2）使用标准生成文件运行
+make -f Makefile.unx
+（3）其他编译选项
+	make check : create and run tests创建并运行测试
+make tests : create additional unit tests创建其他单元测试
+make perfs : create included performance tests创建包含的性能测试
+make ex : build examples  构建示例
+make other : build other utilities such as compression file tests生成其他实用程序，如压缩文件测试
+make doc : build API manual构建API手册
+ISA-L测试
+EC库自带perf程序测试
+利用make perfs编译选项编译出测试性能的可执行文件
+遇到问题1：
+	编译旧版本的perfs选项会报以下错误：
+[root@localhost isa-l-2.18.0]# make perf
+  CCLD     erasure_code/gf_vect_mul_perf
+erasure_code/gf_vect_mul_perf.o: In function `main':
+/home/isa-l-2.18.0/erasure_code/gf_vect_mul_perf.c:96: undefined reference to `perf_print'
+collect2: error: ld returned 1 exit status
+make: *** [erasure_code/gf_vect_mul_perf] Error 1
+
+解决方式：
+	因为在include/test.h中perf_print相关接口定义为：inline void perf_print 的内联接口，导致编译是无法正常链接到。经过摸索和参考新版本的isa-l.2.29中的相关定义，在inline前面加上static定义，即 static inline void perf_print则可正常链接，编译通过。
+注：引入内联函数的目的是为了解决程序中函数调用的效率问题，也是用内联函数取代带参宏定义（函数传参比宏更加方便易用）。inline关键字用来定义一个类的内联函数。
+inline函数是不能像传统的函数那样放在.c中然后在.h中给出接口在其余文件中调用的,因为inline函数其实是跟宏定义类似，不存在所谓的函数入口，所以一般定义在.h文件中。
+因为inline前面如果没有static，会出现一个问题，就是说如果inline函数在两个不同的文件中出现，也就是说一个.h被两个不同的文件包含，则会出现重名，链接失败。所以static inline 的用法就能很好的解决这个问题，使用static修饰符，函数仅在文件内部可见，不会污染命名空间。可以理解为一个inline在不同的.C里面生成了不同的实例，而且名字是完全相同的
+编译成功，可以进行如下测试：
+[root@localhost erasure_code]# ./erasure_code_update_perf 
+ec_encode_data_update_perf: 101x2076352 1
+ec_encode_data_update_cold: runtime =    3090738 usecs, bandwidth 26423 MB in 3.0907 sec = 8549.30 MB/s
+ec_encode_data_update_single_src_cold: runtime =    3062006 usecs, bandwidth 89195 MB in 3.0620 sec = 29129.90 MB/s
+ec_encode_data_update_single_src_simple_cold: runtime =    3012994 usecs, bandwidth 88664 MB in 3.0130 sec = 29427.33 MB/s
+ec_encode_data_update_decode_cold: runtime =    3078706 usecs, bandwidth 22229 MB in 3.0787 sec = 7220.38 MB/s
+done all: Pass
+[root@localhost erasure_code]# 
+[root@localhost erasure_code]# ./erasure_code_perf 
+erasure_code_perf: 101x2076352 1
+erasure_code_encode_cold: runtime =    3110302 usecs, bandwidth 12163 MB in 3.1103 sec = 3910.64 MB/s
+erasure_code_decode_cold: runtime =    3045832 usecs, bandwidth 11743 MB in 3.0458 sec = 3855.71 MB/s
+done all: Pass
+[root@localhost erasure_code]# 
+[root@localhost erasure_code]# ./erasure_code_base_perf 
+erasure_code_base_perf: 101x2076352 1
+erasure_code_base_encode_cold: runtime =    3784498 usecs, bandwidth 838 MB in 3.7845 sec = 221.65 MB/s
+erasure_code_base_decode_cold: runtime =    3813195 usecs, bandwidth 838 MB in 3.8132 sec = 219.99 MB/s
+	并且，以上测试可以修改测试源码，进行n+m的修改，从而进行针对性的测试，即修改erasure_code_perf.c、erasure_code_base_perf.c或者erasure_code_update_perf.c中main函数中以下参数：
+	m = 14;      /*总数据块*/
+	k = 10;      /*数据块，即iraid中n+m的n值*/
+	nerrs = 4;   /*支持的冗余，即错误的数据块数量，即iraid中n+m的m值*/
+Ec在iraid中的使用
+函数调用关系
+	经过走读代码分析，iraid中利用ec计算校验数据时的大致调用流程如下：
+	最终调用的ec库接口为：
+gf_4vect_dot_prod_sse 
+gf_3vect_dot_prod_sse 
+gf_2vect_dot_prod_sse 
+gf_1vect_dot_prod_sse 
+	所以是否可以单独测试这些接口的性能即可？
+	erasure_code_test？
+编译使用EC库
+	在iraid中对于EC的使用是已链接静态库的方式使用的，ec静态库放在IRAID-DRIVER目录的include中：IRAID-DRIVER\include\erasure_code.a，在编译driver的Makefile里面利用如下语句将静态库编译到驱动中：
+default:
+		$(MAKE) -C $(KDIR) SUBDIRS=$(PWD) modules
+		@if [ -d $(LDPATH) ]; then ld -r -m elf_x86_64 -T /usr/src/kernels/linux-$(shell uname -r)/scripts/module-common.lds --build-id -o raid456.ko raid456.o raid456.mod.o ../include/erasure_code.a ;fi
+		@if [ ! -d $(LDPATH) ]; then ld -r -m elf_x86_64 -T /usr/src/kernels/$(shell uname -r)/scripts/module-common.lds --build-id -o raid456.ko raid456.o raid456.mod.o ../include/erasure_code.a ;fi
+如何生成erasure_code.a？
+	参考吴总之前的ec的代码，利用Makefile进行生成，Makefile文件如下：
+lib_name    := 	erasure_code.a
+lsrc        = 	ec_multibinary.asm \
+        gf_2vect_dot_prod_avx2.asm \
+        gf_2vect_dot_prod_avx512.asm \
+        gf_2vect_dot_prod_avx.asm \
+        gf_2vect_dot_prod_sse.asm \
+        gf_2vect_mad_avx2.asm \
+        gf_2vect_mad_avx512.asm \
+        gf_2vect_mad_avx.asm \
+        gf_2vect_mad_sse.asm \
+        gf_3vect_dot_prod_avx2.asm \
+        gf_3vect_dot_prod_avx512.asm \
+        gf_3vect_dot_prod_avx.asm \
+        gf_3vect_dot_prod_sse.asm \
+        gf_3vect_mad_avx2.asm \
+        gf_3vect_mad_avx512.asm \
+        gf_3vect_mad_avx.asm \
+        gf_3vect_mad_sse.asm \
+        gf_4vect_dot_prod_avx2.asm \
+        gf_4vect_dot_prod_avx512.asm \
+        gf_4vect_dot_prod_avx.asm \
+        gf_4vect_dot_prod_sse.asm \
+        gf_4vect_mad_avx2.asm \
+        gf_4vect_mad_avx512.asm \
+        gf_4vect_mad_avx.asm \
+        gf_4vect_mad_sse.asm \
+        gf_5vect_dot_prod_avx2.asm \
+        gf_5vect_dot_prod_avx.asm \
+        gf_5vect_dot_prod_sse.asm \
+        gf_5vect_mad_avx2.asm \
+        gf_5vect_mad_avx.asm \
+        gf_5vect_mad_sse.asm \
+        gf_6vect_dot_prod_avx2.asm \
+        gf_6vect_dot_prod_avx.asm \
+        gf_6vect_dot_prod_sse.asm \
+        gf_6vect_mad_avx2.asm \
+        gf_6vect_mad_avx.asm \
+        gf_6vect_mad_sse.asm \
+        gf_vect_dot_prod_avx2.asm \
+        gf_vect_dot_prod_avx512.asm \
+        gf_vect_dot_prod_avx.asm \
+        gf_vect_dot_prod_sse.asm \
+        gf_vect_mad_avx2.asm \
+        gf_vect_mad_avx512.asm \
+        gf_vect_mad_avx.asm \
+        gf_vect_mad_sse.asm \
+        gf_vect_mul_avx.asm \
+        gf_vect_mul_sse.asm
+        
+lsrc32	     += ec_highlevel_func.c ec_multibinary.asm ec_base.c ec_base_aliases.c
+
+unit_tests32 += erasure_code_base_test erasure_code_test \
+		gf_vect_mul_test gf_vect_mul_base_test \
+		gf_vect_dot_prod_base_test gf_vect_dot_prod_test
+
+perf_tests32 += gf_vect_mul_perf gf_vect_dot_prod_perf erasure_code_perf \
+		erasure_code_base_perf gf_vect_dot_prod_1tbl 
+
+extern_hdrs +=	erasure_code.h gf_vect_mul.h test.h types.h
+
+perf_tests  += 	erasure_code_base_perf.c \
+        erasure_code_perf.c \
+        erasure_code_sse_perf.c \
+        erasure_code_update_perf.c \
+        gf_2vect_dot_prod_sse_perf.c \
+        gf_3vect_dot_prod_sse_perf.c \
+        gf_4vect_dot_prod_sse_perf.c \
+        gf_5vect_dot_prod_sse_perf.c \
+        gf_6vect_dot_prod_sse_perf.c \
+        gf_vect_dot_prod_avx_perf.c \
+        gf_vect_dot_prod_perf.c \
+        gf_vect_dot_prod_sse_perf.c \
+        gf_vect_mad_perf.c \
+        gf_vect_mul_avx_perf.c \
+        gf_vect_mul_perf.c \
+        gf_vect_mul_sse_perf.c
+
+unit_tests  += 	erasure_code_base_test.c \
+        erasure_code_sse_test.c \
+        erasure_code_test.c \
+        erasure_code_update_test.c \
+        gf_2vect_dot_prod_sse_test.c \
+        gf_3vect_dot_prod_sse_test.c \
+        gf_4vect_dot_prod_sse_test.c \
+        gf_5vect_dot_prod_sse_test.c \
+        gf_6vect_dot_prod_sse_test.c \
+        gf_inverse_test.c \
+        gf_vect_dot_prod_avx_test.c \
+        gf_vect_dot_prod_base_test.c \
+        gf_vect_dot_prod_sse_test.c \
+        gf_vect_dot_prod_test.c \
+        gf_vect_mad_test.c \
+        gf_vect_mul_avx_test.c \
+        gf_vect_mul_base_test.c \
+        gf_vect_mul_sse_test.c \
+        gf_vect_mul_test.c
+
+other_src   += ec_base.h reg_sizes.asm
+
+VPATH = .. ../include
+
+-include ../make.inc
+
+	将以上Makefile放在/home/isa-l-2.18.0/erasure_code/目录下，进行make，之后会生成/home/isa-l-2.18.0/erasure_code/erasure_code.a静态库文件，另外还会生成一个/home/isa-l-2.18.0/erasure_code/bin/目录，其中存放的是.o文件和.so文件。
+	执行make clean可以进行清除。
+注：不同版本的Makefile可能需要进行微调，以上是以2.18版本举例。
+
+	目前认为若想将不同版本的EC库运用到iraid中进行测试，应该是直接替换erasure_code.a进行重新编译即可。还未测试。
+Iraid使用EC疑问
+对于目前EC在iraid中的使用有如下疑问：
+（1）在iraid使用ec时，经过ec_encode_data  ec_encode_data_sse 会调用ec_encode_data_sse接口，具体接口如下：
+void ec_encode_data_sse(int len, int k, int rows, unsigned char *g_tbls, unsigned char **data, unsigned char **coding)
+{
+    PRINT_INFO("===mlx-ec  len= %d k=%d rows=%d", len, k, rows);
+	if (len < 16) {
+		ec_encode_data_base(len, k, rows, g_tbls, data, coding);
+		return;
+	}
+
+	while (rows >= 4) {
+		gf_4vect_dot_prod_sse(len, k, g_tbls, data, coding);
+		g_tbls += 4 * k * 32;
+		coding += 4;
+		rows -= 4;
+	}
+	switch (rows) {
+	case 3:
+		gf_3vect_dot_prod_sse(len, k, g_tbls, data, coding);
+		break;
+	case 2:
+		gf_2vect_dot_prod_sse(len, k, g_tbls, data, coding);
+		break;
+	case 1:
+		gf_vect_dot_prod_sse(len, k, g_tbls, data, *coding);
+		break;
+	case 0:
+		break;
+	}
+
+}
+	在以上接口调用中，为何只分4个级别，为何当rows>=4时全部调用gf_4vect_dot_prod_sse，为何不再细分当rows=4\5或者>=6中分别调用
+gf_4vect_dot_prod_sse、gf_5vect_dot_prod_sse、gf_6vect_dot_prod_sse？？？
+
+解答：
+	应该可以进行修改，按照新版本的ec中的用法移植到iraid中。
+（2）iraid中 在校验条带是否一致时为什么没有调用ec的接口？不需要吗？经过加日志打印和systemtap跟踪，发现只要在恢复数据的时候才调用到ec接口。
+
+解答：
+	
+
+（3）在ec库中存在sse\avx\avx2三种接口，为何在iraid中选择sse接口？即在如下接口是如何进行选择的？
+int choice_cnt =0;
+void ec_encode_data(int len, int k, int rows, unsigned char *g_tbls, unsigned char **data, unsigned char **coding)
+{
+if(boot_cpu_has(X86_FEATURE_MMX) && (boot_cpu_has(X86_FEATURE_XMM) || boot_cpu_has(X86_FEATURE_MMXEXT))){
+		 if (!choice_cnt)
+		 	printk("HKST_RAID: choice  sse ec\n");
+		 ec_encode_data_sse(len, k, rows, g_tbls, data, coding);
+	 }else if (boot_cpu_has(X86_FEATURE_AVX2) && boot_cpu_has(X86_FEATURE_AVX)){
+		if (!choice_cnt)
+		 	printk("HKST_RAID: choice  avx2 ec\n");
+		ec_encode_data_avx2(len, k, rows, g_tbls, data, coding);
+	}else{
+		if (!choice_cnt)
+		 	printk("HKST_RAID: choice  base ec\n");
+		ec_encode_data_base(len, k, rows, g_tbls, data, coding);
+	}
+	if(!choice_cnt){
+		choice_cnt++;
+	}
+}
+
+解答：
+    /*
+     * 这里主要根据系统支持的SIMD指令集进行选择EC对应的接口函数
+     * #define X86_FEATURE_MMX (0*32+23)  Multimedia Extensions             Intel-MMX
+     * #define X86_FEATURE_XMM (0*32+25)  Streaming SIMD Extensions         Intel-SSE
+     * #define X86_FEATURE_XMM2 (0*32+26)  Streaming SIMD Extensions-2      Intel-SSE2
+     * #define X86_FEATURE_MMXEXT (1*32+22)  AMD MMX extensions             AMD-MMX
+     * #define X86_FEATURE_AVX                                              Intel-AVX
+     * #define X86_FEATURE_AVX2                                             Intel-AVX2
+     */
+	猜测，这里只是根据cpu所能支持的SIMD指令集进行选择，而intel开发这些不同库也是为了应对不同指令集，性能没有本质差别，利用的最终算法应该是一样的。
+	具体关于SIMD指令集相关只是可以参考下面章节。
+sse\avx\avx2区别
+	在isa-l的ersure_code库中有sse、avx、avx2三类接口，如下：
+（1）sse接口
+gf_vect_dot_prod_sse.asm
+gf_2vect_dot_prod_sse.asm
+gf_3vect_dot_prod_sse.asm
+gf_4vect_dot_prod_sse.asm
+gf_5vect_dot_prod_sse.asm
+gf_6vect_dot_prod_sse.asm
+
+gf_vect_mad_sse.asm
+gf_2vect_mad_sse.asm
+gf_3vect_mad_sse.asm
+gf_4vect_mad_sse.asm
+gf_5vect_mad_sse.asm
+gf_6vect_mad_sse.asm
+
+gf_2vect_dot_prod_sse_test.c
+gf_3vect_dot_prod_sse_test.c
+gf_4vect_dot_prod_sse_test.c
+gf_5vect_dot_prod_sse_test.c
+gf_6vect_dot_prod_sse_test.c
+
+gf_vect_mul_sse.asm
+
+（2）avx接口
+gf_vect_dot_prod_avx.asm
+gf_2vect_dot_prod_avx.asm
+gf_3vect_dot_prod_avx.asm
+gf_4vect_dot_prod_avx.asm
+gf_5vect_dot_prod_avx.asm
+gf_6vect_dot_prod_avx.asm
+
+gf_vect_mad_avx.asm
+gf_2vect_mad_avx.asm
+gf_3vect_mad_avx.asm
+gf_4vect_mad_avx.asm
+gf_5vect_mad_avx.asm
+gf_6vect_mad_avx.asm
+
+gf_vect_mul_avx.asm
+
+（3）avx2接口
+gf_vect_dot_prod_avx2.asm
+gf_2vect_dot_prod_avx2.asm
+gf_3vect_dot_prod_avx2.asm
+gf_4vect_dot_prod_avx2.asm
+gf_5vect_dot_prod_avx2.asm
+gf_6vect_dot_prod_avx2.asm
+
+gf_vect_mad_avx2.asm
+gf_2vect_mad_avx2.asm
+gf_3vect_mad_avx2.asm
+gf_4vect_mad_avx2.asm
+gf_5vect_mad_avx2.asm
+gf_6vect_mad_avx2.asm
+
+	而iraid中目前使用的是sse接口，但目前原因未知，为什么选用sse而不选用avx、avx2接口？所以需要弄明白这三种接口的区别。
+	经过上网查阅资料，发现这三种接口分别利用的是不同版本的SIMD指令集，而关于SIMD指令集的相关介绍如下：
+	SIMD指令集
+	SIMD，即Single Instruction, Multiple Data，一条指令操作多个数据．是CPU基本指令集的扩展．主要用于提供fine grain parallelism，即小碎数据的并行操作．比如说图像处理，图像的数据常用的数据类型是RGB565, RGBA8888, YUV422等格式，这些格式的数据特点是一个像素点的一个分量总是用小于等于８bit的数据表示的．如果使用传统的处理器做计算，虽然处理器的寄存器是32位或是64位的，处理这些数据确只能用于他们的低８位，似乎有点浪费．如果把64位寄存器拆成８个８位寄存器就能同时完成８个操作，计算效率提升了８倍．SIMD指令的初衷就是这样的，只不过后来慢慢cover的功能越来越多．
+好多处理器都有SIMD指令，我们先仅关注Intel的SIMD.
+Intel的初代SIMD指令集是MMX，Multi-Media Extension, 即多媒体扩展，因为它的首要目标是为了支持MPEG视频解码．MMX将64位寄存当作2X32或8X8来用，只能处理整形计算．这样的64位寄存器有８组，分别命名为MM0~MM7．这些寄存器不是为MMX单独设置的，而是借用的FPU的寄存器，也就是说MMX指令执行的时候，FPU就没有办法工作．
+SSE, SSE2一直到SSE4，AVX都是一代一代发展过来的，基本上是在原来的基础上增加一些功能。
+即：SSE  SSE2  SSE3  SSE4  AVX  AVX2
+升级gcc版本
+注：若设备可以联网，并配置最新yum源，可以尝试用yum直接安装，方便快捷，命令为：yum –y install gcc g++。本文是由于公司设备无法配置最新yum源无法直接安装所以选择手动配置安装，步骤如下：
+1、 获取安装包并解压
+wget http://ftp.gnu.org/gnu/gcc/gcc-8.3.0/gcc-8.3.0.tar.bz2
+如果设备无法联网，或网速过慢，可以直接拷贝上面网址到浏览器下载
+当然，http://ftp.gnu.org/gnu/gcc  里面有所有的gcc版本供下载，上面的8.3.0版本只是例子，现在已经有更新的版本，可以根据需要进行下载。
+建议下载.bz2的压缩包,文件更小,下载时间更少.
+
+2、 下载供编译gcc的依赖项（选）
+编译gcc依赖m4、mpc、gmp、mpfr库。
+GCC的依赖库间还互有依赖：mpfr依赖gmp、mpc依赖gmp和mpfr，所以GCC的编译安装顺序为：
+1) m4（如果需要）
+2) gmp
+3) mpfr
+4) mpc
+5) GCC
+为了不污染已有的编译和运行环境，可以选择将GCC及依赖库均安装到/usr/local目录，并且最好以root用户完成下述所有操作。
+
+3、编译安装gcc依赖库
+tar -jxvf gcc-8.3.0.tar.gz
+cd gcc-8.3.0
+./contrib/download_prerequisites　
+这个神奇的脚本文件会帮我们下载、配置、安装依赖库，可以节约我们大量的时间和精力。
+若上述脚本执行安装失败，此时可以试试用yum方式安装：
+sudo yum install  gmp  gmp-devel  mpfr  mpfr-devel  libmpc  libmpc-devel
+若还失败，即设备没有办法联网，则需要手动下载相关依赖库的安装包，拷到设备上进行编译安装，可以参考博客：https://blog.csdn.net/Aquester/article/details/89735466
+
+4、 建立一个目录供编译出的文件存放
+mkdir gcc-build-8.3.0
+cd gcc-build-8.3.0
+5、 生成Makefile文件
+../configure --prefix=/usr/local/gcc -enable-checking=release -enable-languages=c,c++ -disable-multilib
+如果遇到类似问题：
+configure: error: Building GCC requires GMP 4.2+, MPFR 2.4.0+ and MPC 0.8.0+.，mpfr2.4.0
+解决：
+sudo yum install  gmp  gmp-devel  mpfr  mpfr-devel  libmpc  libmpc-devel
+6、 编译
+make 
+（注意：此步骤非常耗时,我虚拟机耗时近3小时; 实体机近80分钟,CPU基本是满的,内存也使用不少）
+7、 安装
+make install     (安装需要root权限!)
+查看安装
+ls /usr/local/bin | grep gcc
+8、 修改软链接后查看gcc版本
+mv /usr/bin/gcc /usr/bin/gcc_old
+ln -s /usr/local/gcc/bin/gcc /usr/bin/gcc
+mv /usr/bin/g++ /usr/bin/g++_old
+ln -s /usr/local/gcc/bin/g++ /usr/bin/g++
+gcc --verson
+g++ --version
+若版本信息仍未更新可以尝试重启设备，然后查看gcc版本
+[root@localhost ex2_ISALErasurecodeandrecovery]# gcc -v
+Using built-in specs.
+COLLECT_GCC=gcc
+COLLECT_LTO_WRAPPER=/usr/local/libexec/gcc/x86_64-pc-linux-gnu/8.3.0/lto-wrapper
+Target: x86_64-pc-linux-gnu
+Configured with: ../configure -enable-checking=release -enable-languages=c,c++ -disable-multilib
+Thread model: posix
+gcc version 8.3.0 (GCC) 
+
+参考博客：
+centos升级gcc到4.8.2 ：https://blog.csdn.net/liudongdong19/article/details/81392045
+其中包含：自动安装依赖库失败如何用yum方式安装
+
+CentOS 6.6 升级GCC G++ (当前最新版本为v6.1.0) (完整)
+其中下载gcc库链接速度较快
+
+CentOS7.5升级gcc到8.3.0版本：https://www.cnblogs.com/NanZhiHan/p/11010130.html
+
+centos7升级gcc8.2：https://blog.csdn.net/lianshaohua/article/details/83411684
+其中包含利用github下载gcc库
+
+安装GCC-8.3.0及其依赖：https://blog.csdn.net/Aquester/article/details/89735466
+其中包括全手动安装gcc以及其依赖库
+
+升级cmake版本 （要求版本cmake >= 3.1）
+注：若设备可以联网，并配置最新yum源，可以尝试用yum直接安装，方便快捷，命令为：yum –y install cmake。本文是由于公司设备无法配置最新yum源无法直接安装所以选择手动配置安装，步骤如下：
+（1）下载
+https://cmake.org/files/v3.12/cmake-3.12.0-rc1.tar.gz
+（2）解压CMake源码包
+tar -zxvf cmake-3.12.0-rc1.tar.gz
+（3）进入cmark的源码目录
+cd cmake-3.12.0-rc1
+（4）运行当前目录下的一个文件
+./bootstrap
+（5）运行命令（这步时间有点长）
+gmake
+（6）进行安装
+gmake install
+（7）安装完成，可阅读install_manifest.txt查看具体都安装了什么，还可以通过cmake --version 查看cmake版本号，如果输出版本号，则安装成功。
+注：安装完成查看版本号的时候可能会报下面的错误：
+[root@localhost cmake-3.12.0-rc1]# cmake -version
+CMake Error: Could not find CMAKE_ROOT !!!
+CMake has most likely not been installed correctly.
+Modules directory not found in
+/usr/local/bin
+Segmentation fault
+解决方式有两个：
+	使用绝对路径执行cmake：
+[root@localhost cmake-3.12.0-rc1]# /usr/local/bin/cmake -version
+cmake version 3.12.0-rc1
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+	先执行一下hash –r
+[root@localhost cmake-3.12.0-rc1]# hash -r
+[root@localhost cmake-3.12.0-rc1]# cmake -version
+cmake version 3.12.0-rc1
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+
+
+安装boost库
+1、源码下载
+官网下载  下载最新的boost库:http://www.boost.org/   
+问题：官网下载的是否全还未知，只是猜测，公司网无法下载，需要在家里外网尝试下载验证下。
+注意：https://github.com/boostorg/boost  从github上下载到的包内容不全，直接执行包里面的bootstrap.sh会报以下错误：
+[root@localhost boost-master]# ./bootstrap.sh 
+./bootstrap.sh: line 196: ./tools/build/src/engine/build.sh: No such file or directory
+Building Boost.Build engine with toolset ... 
+Failed to build Boost.Build build engine
+Consult 'bootstrap.log' for more details
+原因就是内容不全，到相应目录下查看文件夹都是空的。从github上下载的boost-boost-1.66.0.tar.gz包大小才1M多点，实际全的包大概有70多M。
+解决：可以尝试下述方式，利用git命令直接下载，解决：
+最后发现解决办法可以参考：https://github.com/boostorg/boost/wiki/Getting-Started
+git clone --recursive https://github.com/boostorg/boost.git
+cd boost
+git checkout develop # or whatever branch you want to use  ###该步骤应该是下载编译boost所需工具，若执行成功应该就可以解决build.sh找不到的问题，不过只是猜测，公司设备执行此命令不成功，所以我的办法是找到可以下载到全部内容的boost源码包（最后是政哥给我了之前下载到的包：boost_1_64_0.tar.bz2）。
+.\bootstrap.sh
+.\b2 
+2、linux平台下要编译安装除gcc和gcc-c++之外，还需要两个开发库：bzip2-devel 和python-devel，因此在安装前应该先保证这两个库已经安装：
+#yum install gcc gcc-c++ bzip2 bzip2-devel bzip2-libs python-devel –y
+注意：以上是编译环境，若缺少可以按照上述命令进行下载安装。我的测试环境以及全部按照，并且gcc和g++版本以及升级到了8.3版本。
+
+3、解压
+#tar jvzf boost_1_64_0.tar.bz2
+4、执行配置脚本
+进入boost_1_64_0目录：
+# cd boost_1_64_0/
+boost源码包中有配置脚本，直接用就可以：
+#sh ./bootstrap.sh
+Building Boost.Build engine with toolset gcc... tools/build/v2/engine/bin.linuxx86_64/b2
+Detecting Python version... 2.6
+Detecting Python root... /usr
+Unicode/ICU support for Boost.Regex?... not found.
+Generating Boost.Build configuration in project-config.jam...
+Bootstrapping is done. To build, run:
+    ./b2
+    
+To adjust configuration, edit 'project-config.jam'.
+Further information:
+
+   - Command line help:
+     ./b2 --help
+     
+   - Getting started guide: 
+     http://www.boost.org/more/getting_started/unix-variants.html
+     
+   - Boost.Build documentation:
+     http://www.boost.org/boost-build2/doc/html/index.html
+5、编译
+接下来就是编译，重点关注是否编译成功：
+./bootstrap.sh --with-libraries=all --with-toolset=gcc
+--with-liraries：需要编译的库
+--with-toolset：编译时使用的编译器
+此处我选择默认选项，执行下述命令：
+#./b2
+然后就是漫长的等待，如果最后出现：
+The Boost C++ Libraries were successfully built!
+The following directory should be added to compiler include paths:
+    /home/boost_1_64_0
+The following directory should be added to linker library paths:
+/home/boost_1_64_0/stage/lib
+6、安装
+./b2 install --prefix=/usr
+--prefix：boost库的安装目录，不加此参数，默认安装在/usr/local目录下
+选择默认安装：
+ ./b2 install 
+7、使用说明
+1、  boost中大部分库是不用编译成动态或者静态链接库。
+2、  只有regex,thread等几个库比较麻烦一点.要编译。
+3、  如果用gcc编译器-l指定动态链接库的路径,还要指定头文件的路径。
+4、  或者链接的boost库放到.c或.cpp之后，否则链接不能通过，编译可以通过。
+
+如下所示：g++ -lz -lpthread hh.c -lboost_filesystem -lboost_thread
